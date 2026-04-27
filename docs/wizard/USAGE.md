@@ -34,7 +34,25 @@ When inactive, the host behaves exactly like upstream PowerShell.
 
 | Cmdlet | What |
 | ------ | ---- |
-| `Get-WizardSession` | One-line snapshot: PID, pipe name, log dir, `WizardControlEnabled`, `HookHostStatus`, encoding, native-error pref, started time. |
+| `Get-WizardSession` | One-line snapshot of *this* process: PID, pipe name, log dir, `WizardControlEnabled`, `HookHostStatus`, encoding, native-error pref, started time. |
+| `Get-WizardSessions [-IncludeStale] [-SessionRoot <path>]` | **γ1.** Enumerates *all* wizard pwsh sessions on this machine by scanning `%LOCALAPPDATA%\WizardPowerShell\sessions\*.json`. Returns `WizardSessionEntry` records with `Pid`, `PipeName`, `Cwd`, `Executable`, `Started`, `IsAlive`. Stale entries (PID gone) excluded by default. Discovery primitive for agents that need to find a live wizard pipe by enumeration. |
+
+### Python client
+
+A canonical Python binding at `tools/wizard/clients/python/wizard_pwsh_client.py` ships the same protocol for non-PowerShell callers. Replaces hand-rolled marshalling like `Wizard_Erasmus/ai_wrappers/pwsh_control.py`.
+
+```python
+from wizard_pwsh_client import WizardPwshClient, list_sessions
+
+for s in list_sessions():
+    print(s.pid, s.pipe_name, s.cwd)
+
+with WizardPwshClient(pid=12345) as client:
+    client.publish_signal("agent.heartbeat", {"alive": True})
+    client.warmup_hooks(["cognitive_pulse", "pretool_cache"])
+```
+
+Requires `pywin32` on Windows. See `tools/wizard/clients/python/README.md` for details.
 
 ### Token-bounded execution
 
