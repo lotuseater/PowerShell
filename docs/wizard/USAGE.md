@@ -152,6 +152,20 @@ Use `tools/wizard/Install-WizardSettings.ps1` once shipped — it backs up `sett
 
 ---
 
+## Codex parity
+
+Codex on Windows inherits the parent shell, so once `pwsh.exe` is the wizard shim, Codex picks up `WIZARD_PWSH_CONTROL=1` and the cmdlets transparently. Verify by asking Codex to run `Get-WizardSession` — `WizardControlEnabled` must be `$true`.
+
+To install Codex-side AI guidance:
+
+- User-level: copy `tools/wizard/templates/.codex/AGENTS.md` to `C:\Users\Oleh\.codex\AGENTS.md`.
+- User-level config example: `tools/wizard/templates/.codex/config.toml.example`.
+- Per-repo skills: `Install-RepoAIContract.ps1` already deploys `.agents/skills/{repo-search,compact-test}/SKILL.md` which Codex reads for project skills.
+
+If Codex shows `WizardControlEnabled=$false`, the parent terminal wasn't the shim. Relaunch via `mcp__wizard__vscode_launch_agent` from a Wizard-shim shell, or pick the Wizard profile in Windows Terminal.
+
+---
+
 ## Local-only AI files for upstream forks
 
 If the repo is `microsoft/PowerShell` or another upstream repo, run `Install-RepoAIContract -RepoType Upstream` (it auto-detects from the remote URL). That mode adds `AGENTS.md`, `CLAUDE.md`, `.rgignore`, `.aiignore`, and the skill dirs **without** committing them — they go through `.git/info/exclude` so they stay untracked. Use this for any fork where the AI-helper files would be unwelcome upstream.
