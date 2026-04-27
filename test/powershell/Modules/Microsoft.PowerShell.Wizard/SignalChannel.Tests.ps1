@@ -138,6 +138,61 @@ Describe "Wizard signal channel" -Tags "Feature" {
         } finally { Stop-WizardPwsh $proc }
     }
 
+    It "Read-WizardSignal -WaitMs 0 returns immediately when no events" {
+        $pipeName = "wizard-pwsh-test-readimm-$([Guid]::NewGuid().ToString('N'))"
+        $proc = Start-WizardPwsh -PipeName $pipeName
+        try {
+            Import-Module (Join-Path $PSHOME "Modules/Microsoft.PowerShell.Wizard/Microsoft.PowerShell.Wizard.psd1") -Force
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $r = Read-WizardSignal -Topic 'never.fires' -Since 0 -PipeName $pipeName -WaitMs 0
+            $sw.Stop()
+            $r.status | Should -BeExactly 'ok'
+            $r.events.Count | Should -Be 0
+            # No wait → must complete in well under 1 s.
+            $sw.ElapsedMilliseconds | Should -BeLessThan 1000
+        } finally { Stop-WizardPwsh $proc }
+    }
+
+    It "Read-WizardSignal -WaitMs polls until an event lands or timeout" {
+        $pipeName = "wizard-pwsh-test-readwait-$([Guid]::NewGuid().ToString('N'))"
+        $proc = Start-WizardPwsh -PipeName $pipeName
+        try {
+            Import-Module (Join-Path $PSHOME "Modules/Microsoft.PowerShell.Wizard/Microsoft.PowerShell.Wizard.psd1") -Force
+
+            # Publish AFTER starting the wait — kicks off a 200ms-delayed publish in a runspace.
+            $rs = [runspacefactory]::CreateRunspace()
+            $rs.Open()
+            $ps = [powershell]::Create().AddScript({
+                param($pipe)
+                Start-Sleep -Milliseconds 250
+                $client = [System.IO.Pipes.NamedPipeClientStream]::new('.', $pipe, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::None)
+                $client.Connect(3000)
+                $w = [System.IO.StreamWriter]::new($client, [System.Text.UTF8Encoding]::new($false), 4096, $true)
+                $w.AutoFlush = $true
+                $r = [System.IO.StreamReader]::new($client, [System.Text.Encoding]::UTF8, $false, 4096, $true)
+                $w.WriteLine('{"command":"signal.publish","topic":"wait.test","data":{"hello":"world"}}')
+                $null = $r.ReadLine()
+                $client.Dispose()
+            }).AddArgument($pipeName)
+            $ps.Runspace = $rs
+            $handle = $ps.BeginInvoke()
+            try {
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                $r = Read-WizardSignal -Topic 'wait.test' -Since 0 -PipeName $pipeName -WaitMs 5000 -PollIntervalMs 50
+                $sw.Stop()
+                $r.events.Count | Should -BeGreaterThan 0
+                $r.events[0].data.hello | Should -BeExactly 'world'
+                # Must have actually waited (≥200ms) but well under the 5s ceiling.
+                $sw.ElapsedMilliseconds | Should -BeGreaterThan 100
+                $sw.ElapsedMilliseconds | Should -BeLessThan 4500
+            } finally {
+                $ps.EndInvoke($handle) | Out-Null
+                $ps.Dispose()
+                $rs.Dispose()
+            }
+        } finally { Stop-WizardPwsh $proc }
+    }
+
     It "rejects publish without topic" {
         $pipeName = "wizard-pwsh-test-bad-$([Guid]::NewGuid().ToString('N'))"
         $proc = Start-WizardPwsh -PipeName $pipeName
