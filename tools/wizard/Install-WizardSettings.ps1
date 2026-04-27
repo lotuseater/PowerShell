@@ -79,9 +79,20 @@ if (-not $HookName) {
 $raw = Get-Content -LiteralPath $SettingsPath -Raw -Encoding utf8
 $config = $raw | ConvertFrom-Json -AsHashtable
 
-# The replacement command. It honours WIZARD_HOOKS_REWIRED=0 as a kill switch:
-# if it's set to '0', the original path is invoked instead.
-$replacement = "if (`$env:WIZARD_HOOKS_REWIRED -eq '0') { & py -3.14 'C:\\Users\\Oleh\\Documents\\GitHub\\Wizard_Erasmus\\src\\mcp\\${HookName}_hook.py' } else { Invoke-WizardHook -Name $HookName -Payload (`$Input | ConvertFrom-Json -AsHashtable) | ConvertTo-Json -Depth 10 -Compress }"
+# The replacement preserves the ORIGINAL command as the fallback so we don't lose info
+# about subdirectory hooks (e.g. hooks/pretool_cache_hook.py). Kill switch: if
+# WIZARD_HOOKS_REWIRED is set to '0', the original path is invoked unchanged.
+function New-Replacement {
+    param([string] $OriginalCommand, [string] $HookName)
+    $escapedOriginal = $OriginalCommand -replace "'", "''"
+    # Two-arm command:
+    #   * WIZARD_HOOKS_REWIRED='0'  → run the original cold-spawn unchanged (kill switch).
+    #   * default                   → relay to the warm Python child and emit the hook's
+    #                                  raw JSON output (the C# layer wraps it in an envelope;
+    #                                  we extract `.result` to preserve the original
+    #                                  Claude-Code stdin/JSON-stdout hook contract).
+    return "if (`$env:WIZARD_HOOKS_REWIRED -eq '0') { `$cmd = '$escapedOriginal'; Invoke-Expression `$cmd } else { try { `$rsp = Invoke-WizardHook -Name $HookName -Payload (`$Input | ConvertFrom-Json -AsHashtable -ErrorAction SilentlyContinue) -ErrorAction Stop; if (`$rsp.status -eq 'ok' -and `$rsp.result) { `$rsp.result | ConvertTo-Json -Depth 10 -Compress } } catch { `$cmd = '$escapedOriginal'; Invoke-Expression `$cmd } }"
+}
 
 $matches = @()
 function Walk-Hooks {
@@ -94,10 +105,14 @@ function Walk-Hooks {
         foreach ($k in @($node.Keys)) {
             $v = $node[$k]
             if ($k -eq 'command' -and $v -is [string] -and $v -match [regex]::Escape("${HookName}_hook.py")) {
+                # Skip if already rewired (idempotent re-run).
+                if ($v -match 'Invoke-WizardHook\s+-Name\s+' + [regex]::Escape($HookName) + '\b') {
+                    continue
+                }
                 $script:matches += [pscustomobject]@{
                     Path    = "$path.$k"
                     Old     = $v
-                    New     = $replacement
+                    New     = (New-Replacement -OriginalCommand $v -HookName $HookName)
                     Container = $node
                 }
             } else {
