@@ -1,0 +1,20 @@
+# Wizard PowerShell — Codex configuration example
+#
+# Drop this file at C:\Users\Oleh\.codex\config.toml after reviewing.
+#
+# Keys not commented out below are wizard-specific. Other Codex settings (model selection,
+# provider keys, sandboxing) are already managed by Codex itself; do not duplicate them here.
+
+# Codex inherits the parent shell on Windows. When the wizard pwsh.exe shim is the user's
+# default (via `Install-WizardPwsh.ps1 -RegisterAsDefault All`), Codex picks up
+# WIZARD_PWSH_CONTROL=1 transparently. If a Codex tab is launched from a non-shim shell,
+# the env var won't propagate.
+#
+# Verify in any Codex tab: ask it to run `Get-WizardSession` — the result must show
+# WizardControlEnabled=$true. If it shows $false, the parent terminal isn't the wizard
+# shim; relaunch through `mcp__wizard__vscode_launch_agent` or the Windows Terminal
+# wizard profile.
+
+# trusted_paths: keep this section as Codex generated it; just append the Wizard repo if you use it.
+# [trusted_paths]
+# "C:\\Users\\Oleh\\Documents\\GitHub\\PowerShell" = true
