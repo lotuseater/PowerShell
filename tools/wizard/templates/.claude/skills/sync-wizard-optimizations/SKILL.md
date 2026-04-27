@@ -47,6 +47,23 @@ This skill is the per-tick body that `/loop 30m /sync-wizard-optimizations` runs
 
 5. **Report deltas** in 3-5 lines: `signal counts, test exit code, anything new since previous tick`. Save the cursor to `loop-state.json` for the next tick.
 
+## Self-relaunch idempotency
+
+If this loop body decides to **re-launch the current session** (e.g. swap models or change project), gate it through a Wizard lock so a runaway loop can't fire the same handoff dozens of times:
+
+```powershell
+$prior = Use-WizardLock -Key "loop-relaunch-$($session.Pid)" -Note "Phase 10 self-handoff at $(Get-Date -Format o)"
+if ($null -eq $prior) {
+    # Lock acquired — first time. Do the relaunch.
+    # mcp__wizard__terminal_session_handoff(session_id=current, loop=true, period=1800, close_original=true)
+} else {
+    # Already done at $($prior.AcquiredAt) by PID $($prior.AcquiredBy). Skip.
+    "skip-self-relaunch (already handed off at $($prior.AcquiredAt))"
+}
+```
+
+To re-arm after a deliberate stop, the user runs `Clear-WizardLock -Key loop-relaunch-<pid>`.
+
 ## Stop conditions
 
 - Test passes & no new error signals → silent ack and continue.
