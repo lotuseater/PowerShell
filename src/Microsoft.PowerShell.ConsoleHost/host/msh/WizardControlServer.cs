@@ -17,9 +17,12 @@ using System.Threading.Tasks;
 namespace Microsoft.PowerShell
 {
     /// <summary>
-    /// Opt-in local control plane for agent-driven terminal automation.
+    /// Opt-in local control plane for agent-driven terminal automation. Made <c>partial</c>
+    /// so feature subsystems (hook host, future signal extensions) can split into their own
+    /// files without bloating the dispatch core. Each partial extends `dispatch` via the
+    /// `TryHandleHookVerb` / `TryHandleSignalVerb` pattern called from <see cref="HandleRequest"/>.
     /// </summary>
-    internal sealed class WizardControlServer : IDisposable
+    internal sealed partial class WizardControlServer : IDisposable
     {
         internal const string EnableEnvironmentVariable = "WIZARD_PWSH_CONTROL";
         internal const string PipeEnvironmentVariable = "WIZARD_PWSH_CONTROL_PIPE";
@@ -106,6 +109,7 @@ namespace Microsoft.PowerShell
 
             _disposed = true;
             _cancel.Cancel();
+            DisposeHookHost();
             try
             {
                 if (File.Exists(_sessionPath))
@@ -204,6 +208,14 @@ namespace Microsoft.PowerShell
                         return SignalList();
                     case "signal.clear":
                         return SignalClear(root);
+                    case "hook.register":
+                        return HookRegister(root);
+                    case "hook.invoke":
+                        return HookInvoke(root);
+                    case "hook.list":
+                        return HookList();
+                    case "hook.unregister":
+                        return HookUnregister(root);
                     default:
                         return JsonSerializer.Serialize(new { status = "error", error = "unknown_command", command });
                 }

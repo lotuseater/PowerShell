@@ -53,6 +53,25 @@ function Get-WizardSession {
 
     $started = (Get-Process -Id $PID).StartTime
 
+    # Phase 6: ask the warm Python hook host (if any) for its live status. Cheap pipe call;
+    # if WIZARD_PWSH_CONTROL is not set or the server isn't up, falls back to "disabled".
+    $hookHostStatus = 'disabled'
+    if ($isEnabled) {
+        try {
+            $listResp = Send-WizardControlRequest -Payload @{ command = 'hook.list' } -PipeName $pipeName -ConnectTimeoutMs 250
+            if ($listResp.status -eq 'ok') {
+                if ($listResp.hooks -and $listResp.hooks.Count -gt 0) {
+                    $hookHostStatus = "warm ($($listResp.hooks.Count) hooks)"
+                } else {
+                    $hookHostStatus = 'idle'
+                }
+            }
+        } catch {
+            # Pipe unreachable from a non-host context (e.g. cmdlet running outside the wizard pwsh).
+            $hookHostStatus = 'disabled'
+        }
+    }
+
     [pscustomobject]@{
         PSTypeName            = 'WizardSession'
         Pid                   = $PID
@@ -60,7 +79,7 @@ function Get-WizardSession {
         SessionRecord         = $sessionRecord
         LogDir                = $logDir
         WizardControlEnabled  = [bool]$isEnabled
-        HookHostStatus        = 'disabled'
+        HookHostStatus        = $hookHostStatus
         ConsoleEncoding       = [Console]::OutputEncoding.WebName
         OutputEncoding        = $OutputEncoding.WebName
         NativeErrorPreference = $PSNativeCommandUseErrorActionPreference

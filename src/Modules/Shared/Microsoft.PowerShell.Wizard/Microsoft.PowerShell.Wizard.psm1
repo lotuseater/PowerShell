@@ -22,8 +22,9 @@
 . $PSScriptRoot/Use-WizardLock.ps1
 . $PSScriptRoot/Clear-WizardLock.ps1
 . $PSScriptRoot/Set-ClaudeTrust.ps1
+. $PSScriptRoot/Invoke-WizardHook.ps1
 
-Export-ModuleMember -Function 'Get-WizardSession', 'Invoke-Bounded', 'Get-WizardLog', 'Publish-WizardSignal', 'Read-WizardSignal', 'Start-MonitoredProcess', 'Invoke-BashCompat', 'Find-Code', 'Find-Repos', 'Find-CodeAcrossRepos', 'Get-AIContext', 'Get-RepoProfile', 'Invoke-RepoBuild', 'Invoke-RepoTest', 'Update-RepoDigest', 'Measure-RepoSearch', 'Test-WizardBuildPrereqs', 'Use-WizardLock', 'Clear-WizardLock', 'Set-ClaudeTrust'
+Export-ModuleMember -Function 'Get-WizardSession', 'Invoke-Bounded', 'Get-WizardLog', 'Publish-WizardSignal', 'Read-WizardSignal', 'Start-MonitoredProcess', 'Invoke-BashCompat', 'Find-Code', 'Find-Repos', 'Find-CodeAcrossRepos', 'Get-AIContext', 'Get-RepoProfile', 'Invoke-RepoBuild', 'Invoke-RepoTest', 'Update-RepoDigest', 'Measure-RepoSearch', 'Test-WizardBuildPrereqs', 'Use-WizardLock', 'Clear-WizardLock', 'Set-ClaudeTrust', 'Invoke-WizardHook'
 
 # Register bash / sh aliases ONLY when the wizard control plane is on. Otherwise leave the
 # user's PATH bash.exe alone — these aliases are agent-mode glue, not user-facing reskinning.

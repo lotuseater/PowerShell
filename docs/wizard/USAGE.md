@@ -57,6 +57,16 @@ When inactive, the host behaves exactly like upstream PowerShell.
 | ------ | ---- |
 | `Invoke-BashCompat -c '<command>'` | Translate a small bash subset (`&&`, `\|\|`, `;`, `\|`, `head -n`, `tail -n`, `grep`, `2>&1`, leading `cd DIR && …`) to PowerShell and execute. Falls back to `bash.exe` for anything outside the subset (publishing `wizard.bashcompat.unsupported`). Aliases `bash` and `sh` are registered automatically when `WIZARD_PWSH_CONTROL=1`. |
 
+### Persistent Python hook host (Phase 6)
+
+| Cmdlet | What |
+| ------ | ---- |
+| `Invoke-WizardHook -Name <hook> [-Payload <object>] [-TimeoutMs 30000]` | JSON-RPC over the local pipe to a warm Python child. The first call lazy-spawns `py -3.14 -m wizard_mcp.hook_host`; subsequent calls reuse the warm process. |
+
+Wiring on the WizardErasmus side: drop `tools/wizard/hook_host_reference.py` into `Wizard_Erasmus/src/mcp/hook_host.py`, register your hook callables in the `HOOKS` dict, and (optionally) point `$env:WIZARD_HOOKHOST_MODULE` at a different module path. Each callable runs inside the warm child — pay the import cost once per shell, not once per hook fire.
+
+The warm child is killed automatically when the host pwsh exits (`WizardControlServer.Dispose()` calls `DisposeHookHost()`).
+
 ### Idempotency locks
 
 | Cmdlet | What |
