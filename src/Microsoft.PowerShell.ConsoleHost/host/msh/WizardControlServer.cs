@@ -43,10 +43,21 @@ namespace Microsoft.PowerShell
 
         internal string PipeName => _pipeName;
 
+        /// <summary>
+        /// Returns true when WIZARD_PWSH_CONTROL is set to a truthy value. Cheap, side-effect free,
+        /// safe to call from any startup path (including LoadPSReadline) before the server itself runs.
+        /// </summary>
+        internal static bool IsEnabled
+        {
+            get
+            {
+                return IsTruthy(Environment.GetEnvironmentVariable(EnableEnvironmentVariable));
+            }
+        }
+
         internal static WizardControlServer StartIfEnabled(ConsoleHost host)
         {
-            string enabled = Environment.GetEnvironmentVariable(EnableEnvironmentVariable);
-            if (!IsTruthy(enabled))
+            if (!IsEnabled)
             {
                 return null;
             }
