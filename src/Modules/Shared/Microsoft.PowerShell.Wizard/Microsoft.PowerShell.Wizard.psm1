@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 . $PSScriptRoot/Get-WizardSession.ps1
+. $PSScriptRoot/Get-WizardSessions.ps1
 . $PSScriptRoot/Invoke-Bounded.ps1
 . $PSScriptRoot/Get-WizardLog.ps1
 . $PSScriptRoot/Send-WizardControlRequest.ps1
@@ -26,7 +27,7 @@
 . $PSScriptRoot/Invoke-AntQuery.ps1
 . $PSScriptRoot/Initialize-WizardHookHost.ps1
 
-Export-ModuleMember -Function 'Get-WizardSession', 'Invoke-Bounded', 'Get-WizardLog', 'Publish-WizardSignal', 'Read-WizardSignal', 'Start-MonitoredProcess', 'Invoke-BashCompat', 'Find-Code', 'Find-Repos', 'Find-CodeAcrossRepos', 'Get-AIContext', 'Get-RepoProfile', 'Invoke-RepoBuild', 'Invoke-RepoTest', 'Update-RepoDigest', 'Measure-RepoSearch', 'Test-WizardBuildPrereqs', 'Use-WizardLock', 'Clear-WizardLock', 'Set-ClaudeTrust', 'Invoke-WizardHook', 'Invoke-AntQuery', 'Initialize-WizardHookHost'
+Export-ModuleMember -Function 'Get-WizardSession', 'Get-WizardSessions', 'Invoke-Bounded', 'Get-WizardLog', 'Publish-WizardSignal', 'Read-WizardSignal', 'Start-MonitoredProcess', 'Invoke-BashCompat', 'Find-Code', 'Find-Repos', 'Find-CodeAcrossRepos', 'Get-AIContext', 'Get-RepoProfile', 'Invoke-RepoBuild', 'Invoke-RepoTest', 'Update-RepoDigest', 'Measure-RepoSearch', 'Test-WizardBuildPrereqs', 'Use-WizardLock', 'Clear-WizardLock', 'Set-ClaudeTrust', 'Invoke-WizardHook', 'Invoke-AntQuery', 'Initialize-WizardHookHost'
 
 # Register bash / sh aliases ONLY when the wizard control plane is on. Otherwise leave the
 # user's PATH bash.exe alone — these aliases are agent-mode glue, not user-facing reskinning.
