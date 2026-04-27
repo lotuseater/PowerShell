@@ -52,7 +52,11 @@ function Get-WizardSessions {
     Get-ChildItem -LiteralPath $SessionRoot -Filter '*.json' -File -ErrorAction SilentlyContinue | ForEach-Object {
         $sessionPath = $_.FullName
         try {
-            $payload = Get-Content -LiteralPath $sessionPath -Raw -Encoding utf8 | ConvertFrom-Json -ErrorAction Stop
+            # -ErrorAction Stop on Get-Content too — without it the cmdlet's
+            # non-terminating "file not found" (TOCTOU race when a wizard pwsh
+            # exits between Get-ChildItem and our read) leaks past the try/catch.
+            $raw = Get-Content -LiteralPath $sessionPath -Raw -Encoding utf8 -ErrorAction Stop
+            $payload = $raw | ConvertFrom-Json -ErrorAction Stop
         } catch {
             return
         }

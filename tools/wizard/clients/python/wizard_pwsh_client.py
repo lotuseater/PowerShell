@@ -121,8 +121,12 @@ def list_sessions(
         return
     for entry in sorted(root.glob("*.json")):
         try:
-            record = json.loads(entry.read_text(encoding="utf-8"))
-        except Exception:
+            # The C# server writes session JSON with `Encoding.UTF8`, which in .NET
+            # includes a BOM. Use utf-8-sig so we strip it transparently.
+            record = json.loads(entry.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            # OSError covers TOCTOU races where the wizard pwsh exits between glob
+            # and read; ValueError covers JSON decode failures.
             continue
         info = WizardSessionInfo.from_record(record)
         info.is_alive = _is_pid_alive(info.pid)
