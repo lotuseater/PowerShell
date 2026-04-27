@@ -1686,10 +1686,17 @@ namespace Microsoft.PowerShell
             //   * we don't think the process will be interactive, e.g. -command or -file
             //     - exception: when -noexit is specified, we will be interactive after the command/file finishes
             //   * -noninteractive: this should be obvious, they've asked that we don't ever prompt
+            //   * the wizard control plane is enabled and stdin is redirected (agent-driven sessions get
+            //     no benefit from PSReadLine and pay its startup + ANSI-noise cost).
             //
             // Note that PSReadline doesn't support redirected stdin/stdout, but we don't check that here because
             // a future version might, and we should automatically load it at that unknown point in the future.
             // PSReadline will ideally fall back to Console.ReadLine or whatever when stdin/stdout is redirected.
+            if (WizardControlServer.IsEnabled && Console.IsInputRedirected)
+            {
+                return false;
+            }
+
             return ((s_cpp.InitialCommand == null && s_cpp.File == null) || s_cpp.NoExit) && !s_cpp.NonInteractive;
         }
 
@@ -1798,7 +1805,57 @@ namespace Microsoft.PowerShell
 #endif
 
             _wizardControlServer ??= WizardControlServer.StartIfEnabled(this);
+            ApplyWizardStartupHardening();
             DoRunspaceInitialization(args);
+        }
+
+        /// <summary>
+        /// When WIZARD_PWSH_CONTROL=1, normalize the shell environment for agent-driven sessions:
+        /// force UTF-8 console encodings (kill mojibake on non-ASCII paths/output) and set
+        /// $OutputEncoding + $PSNativeCommandUseErrorActionPreference inside the runspace so
+        /// bash-style "fail-fast on nonzero exit" semantics apply to native exes by default.
+        /// Runs before DoRunspaceInitialization so a user profile can still override.
+        /// No-op when the env var isn't set — preserves upstream behavior unchanged.
+        /// </summary>
+        private void ApplyWizardStartupHardening()
+        {
+            if (!WizardControlServer.IsEnabled)
+            {
+                return;
+            }
+
+            try
+            {
+                Console.InputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+                Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            }
+            catch
+            {
+                // Encoding may be locked on some hosts; failing here is non-fatal.
+            }
+
+            Runspace runspace = _runspaceRef?.Runspace;
+            if (runspace == null || runspace.RunspaceStateInfo.State != RunspaceState.Opened)
+            {
+                return;
+            }
+
+            try
+            {
+                using (var ps = System.Management.Automation.PowerShell.Create())
+                {
+                    ps.Runspace = runspace;
+                    ps.AddScript(
+                        "$global:OutputEncoding = [System.Text.UTF8Encoding]::new($false); " +
+                        "$global:PSNativeCommandUseErrorActionPreference = $true",
+                        useLocalScope: false);
+                    ps.Invoke();
+                }
+            }
+            catch
+            {
+                // Hardening is best-effort. A failure here must not block shell startup.
+            }
         }
 
         internal WizardControlSnapshot GetWizardControlSnapshot()
