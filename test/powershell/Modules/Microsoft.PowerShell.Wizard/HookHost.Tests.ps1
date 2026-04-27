@@ -68,6 +68,12 @@ def main():
             except Exception as ex:
                 sys.stdout.write(json.dumps({"id": rid, "status": "error", "error": str(ex)}) + "\n")
             sys.stdout.flush()
+        elif verb == "warmup":
+            # β3: ack-only stub. Real production hosts pre-import the named modules here.
+            names = req.get("names") or []
+            warmed = {n: ("warm" if n in {"echo", "double", "boom", "slow"} else "unknown_hook") for n in names}
+            sys.stdout.write(json.dumps({"id": rid, "status": "ok", "result": {"warmed": warmed}}) + "\n")
+            sys.stdout.flush()
         elif verb == "ping":
             sys.stdout.write(json.dumps({"id": rid, "status": "ok", "result": "pong"}) + "\n")
             sys.stdout.flush()
@@ -200,6 +206,37 @@ if __name__ == "__main__":
             $r = Send-WizardRequest -PipeName $pipe -Payload @{ command = 'hook.invoke' }
             $r.status | Should -BeExactly 'error'
             $r.error | Should -BeExactly 'missing_name'
+        } finally { Stop-WizardPwsh $proc }
+    }
+
+    It "hook.warmup pre-imports named hooks (β3) and reports per-name status" {
+        $pipe = "wizard-pwsh-test-hook-warmup-$([Guid]::NewGuid().ToString('N'))"
+        $proc = Start-WizardPwsh -PipeName $pipe
+        try {
+            $r = Send-WizardRequest -PipeName $pipe -Payload @{ command = 'hook.warmup'; names = @('echo', 'double', 'no_such_hook') }
+            $r.status | Should -BeExactly 'ok'
+            $r.command | Should -BeExactly 'hook.warmup'
+            $r.result.warmed.echo | Should -BeExactly 'warm'
+            $r.result.warmed.double | Should -BeExactly 'warm'
+            # Unknown hooks are reported but don't fail the call.
+            $r.result.warmed.no_such_hook | Should -Match 'unknown_hook|error'
+
+            # First post-warmup invoke should be much cheaper than a cold first invoke
+            # would be (the test stub imports nothing heavy, so this is mainly a smoke
+            # check that warmup followed by invoke still works).
+            $first = Send-WizardRequest -PipeName $pipe -Payload @{ command = 'hook.invoke'; name = 'echo'; payload = @{ ok = $true } }
+            $first.status | Should -BeExactly 'ok'
+            $first.result.echoed.ok | Should -BeTrue
+        } finally { Stop-WizardPwsh $proc }
+    }
+
+    It "hook.warmup returns missing_names when called with no names" {
+        $pipe = "wizard-pwsh-test-hook-warmup-empty-$([Guid]::NewGuid().ToString('N'))"
+        $proc = Start-WizardPwsh -PipeName $pipe
+        try {
+            $r = Send-WizardRequest -PipeName $pipe -Payload @{ command = 'hook.warmup'; names = @() }
+            $r.status | Should -BeExactly 'error'
+            $r.error | Should -BeExactly 'missing_names'
         } finally { Stop-WizardPwsh $proc }
     }
 

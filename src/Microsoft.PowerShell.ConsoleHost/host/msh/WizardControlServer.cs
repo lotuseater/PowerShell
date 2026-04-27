@@ -210,6 +210,8 @@ namespace Microsoft.PowerShell
                         return HookList();
                     case "hook.unregister":
                         return HookUnregister(root);
+                    case "hook.warmup":
+                        return HookWarmup(root);
                     default:
                         return JsonSerializer.Serialize(new { status = "error", error = "unknown_command", command });
                 }

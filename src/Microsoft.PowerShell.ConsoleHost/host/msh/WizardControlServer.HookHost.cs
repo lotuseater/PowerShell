@@ -209,6 +209,100 @@ namespace Microsoft.PowerShell
             }
         }
 
+        private string HookWarmup(JsonElement request)
+        {
+            // β3: pre-import named hook modules in the warm child so the FIRST hook.invoke
+            // doesn't pay the cold-import cost (~200-500 ms for cognitive_pulse).
+            string[] names = Array.Empty<string>();
+            if (request.TryGetProperty("names", out JsonElement namesElement) && namesElement.ValueKind == JsonValueKind.Array)
+            {
+                names = namesElement.EnumerateArray()
+                    .Where(e => e.ValueKind == JsonValueKind.String)
+                    .Select(e => e.GetString())
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .ToArray();
+            }
+            if (names.Length == 0)
+            {
+                return JsonSerializer.Serialize(new { status = "error", error = "missing_names", command = "hook.warmup" });
+            }
+
+            int timeoutMs = GetInt(request, "timeoutMs", DefaultHookTimeoutMs);
+            if (timeoutMs < 100) { timeoutMs = 100; }
+
+            try
+            {
+                EnsureHookHostStarted();
+            }
+            catch (Exception ex)
+            {
+                return JsonSerializer.Serialize(new { status = "error", error = "host_unavailable", command = "hook.warmup", message = ex.Message });
+            }
+
+            long id = Interlocked.Increment(ref _hookInvokeIdCounter);
+            var tcs = new TaskCompletionSource<HookHostReply>(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_hookLock)
+            {
+                _hookPendingReplies[id] = tcs;
+            }
+
+            string namesJson = JsonSerializer.Serialize(names);
+            string frame = "{\"id\":" + id + ",\"verb\":\"warmup\",\"names\":" + namesJson + "}";
+
+            Stopwatch sw = Stopwatch.StartNew();
+            try
+            {
+                lock (_hookLock)
+                {
+                    if (_hookHostStdin == null)
+                    {
+                        throw new InvalidOperationException("hook host stdin is not connected");
+                    }
+                    _hookHostStdin.WriteLine(frame);
+                }
+
+                if (!tcs.Task.Wait(timeoutMs, _cancel.Token))
+                {
+                    lock (_hookLock) { _hookPendingReplies.Remove(id); }
+                    return JsonSerializer.Serialize(new { status = "error", error = "timeout", command = "hook.warmup", timeoutMs });
+                }
+
+                HookHostReply reply = tcs.Task.Result;
+                sw.Stop();
+
+                // Pre-create registry entries so hook.list can show warmed-but-uninvoked hooks
+                // (calls=0). Auto-invoke registration also handles them — this is just for
+                // diagnostic visibility.
+                lock (_hookLock)
+                {
+                    foreach (string n in names)
+                    {
+                        if (!_hookRegistry.ContainsKey(n))
+                        {
+                            _hookRegistry[n] = new HookRecord(n, null);
+                        }
+                    }
+                }
+
+                if (reply.IsError)
+                {
+                    return JsonSerializer.Serialize(new { status = "error", error = reply.Error ?? "host_error", command = "hook.warmup", names });
+                }
+
+                StringBuilder sb = new StringBuilder();
+                sb.Append("{\"status\":\"ok\",\"command\":\"hook.warmup\",\"names\":").Append(namesJson);
+                sb.Append(",\"durationMs\":").Append(sw.ElapsedMilliseconds);
+                sb.Append(",\"result\":").Append(string.IsNullOrEmpty(reply.ResultJson) ? "null" : reply.ResultJson);
+                sb.Append('}');
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                lock (_hookLock) { _hookPendingReplies.Remove(id); }
+                return JsonSerializer.Serialize(new { status = "error", error = "warmup_failed", command = "hook.warmup", message = ex.Message });
+            }
+        }
+
         private void EnsureHookHostStarted()
         {
             lock (_hookLock)

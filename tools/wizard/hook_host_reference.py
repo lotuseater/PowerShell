@@ -76,6 +76,13 @@ def main() -> int:
             if verb == "invoke":
                 result = _handle_invoke(req.get("name", ""), req.get("payload"))
                 sys.stdout.write(json.dumps({"id": rid, "status": "ok", "result": result}) + "\n")
+            elif verb == "warmup":
+                # β3: ack-only stub. Real hosts use this verb to pre-import modules so the
+                # first hook.invoke doesn't pay cold-import cost. Reference hosts here have
+                # nothing to import (HOOKS is statically populated).
+                names = req.get("names") or []
+                warmed = {n: ("warm" if n in HOOKS else "unknown_hook") for n in names}
+                sys.stdout.write(json.dumps({"id": rid, "status": "ok", "result": {"warmed": warmed}}) + "\n")
             elif verb == "ping":
                 sys.stdout.write(json.dumps({"id": rid, "status": "ok", "result": "pong"}) + "\n")
             else:

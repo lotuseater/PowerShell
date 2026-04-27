@@ -35,7 +35,11 @@ function Invoke-Bounded {
         [string] $LogTo,
         [string] $WorkingDirectory,
         [switch] $Quiet,
-        [switch] $MergeStdErr
+        [switch] $MergeStdErr,
+        # β4: when set, each child stdout line is forwarded to the host in real time so
+        # the user/agent sees progress on long-running commands. Stderr lines are forwarded
+        # to host stderr. The bounded result (head/tail/log) is still computed at the end.
+        [switch] $PassThru
     )
 
     if (-not $WorkingDirectory) {
@@ -67,22 +71,72 @@ function Invoke-Bounded {
     $process.StartInfo = $startInfo
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    [void]$process.Start()
 
-    # Read both pipes asynchronously to prevent the child from blocking on a full buffer.
-    $outTask = $process.StandardOutput.ReadToEndAsync()
-    $errTask = $process.StandardError.ReadToEndAsync()
+    if ($PassThru) {
+        # β4: line-streamed mode. Use OutputDataReceived / ErrorDataReceived events so each
+        # line is forwarded to the host as it arrives. We still accumulate everything for
+        # the bounded-result computation at the end. Concurrent-safe: events fire on
+        # background threads, so use ConcurrentQueue and a script-scoped sync object.
+        $outQ = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+        $errQ = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
 
-    $killed = $false
-    if (-not $process.WaitForExit($TimeoutSec * 1000)) {
-        try { $process.Kill($true) } catch { }
-        $process.WaitForExit(5000) | Out-Null
-        $killed = $true
+        $outHandler = {
+            param($sender, $eventArgs)
+            if ($null -ne $eventArgs.Data) {
+                $Event.MessageData.OutQueue.Enqueue($eventArgs.Data)
+                [Console]::Out.WriteLine($eventArgs.Data)
+            }
+        }
+        $errHandler = {
+            param($sender, $eventArgs)
+            if ($null -ne $eventArgs.Data) {
+                $Event.MessageData.ErrQueue.Enqueue($eventArgs.Data)
+                [Console]::Error.WriteLine($eventArgs.Data)
+            }
+        }
+        $msgData = [pscustomobject]@{ OutQueue = $outQ; ErrQueue = $errQ }
+        $outSub = Register-ObjectEvent -InputObject $process -EventName OutputDataReceived -Action $outHandler -MessageData $msgData
+        $errSub = Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -Action $errHandler -MessageData $msgData
+
+        try {
+            [void]$process.Start()
+            $process.BeginOutputReadLine()
+            $process.BeginErrorReadLine()
+
+            $killed = $false
+            if (-not $process.WaitForExit($TimeoutSec * 1000)) {
+                try { $process.Kill($true) } catch { }
+                $process.WaitForExit(5000) | Out-Null
+                $killed = $true
+            }
+            # Drain any outstanding events posted just before exit.
+            $process.WaitForExit()
+        } finally {
+            Unregister-Event -SourceIdentifier $outSub.Name -ErrorAction SilentlyContinue
+            Unregister-Event -SourceIdentifier $errSub.Name -ErrorAction SilentlyContinue
+        }
+        $stopwatch.Stop()
+
+        $stdout = ($outQ.ToArray() -join "`n")
+        $stderr = ($errQ.ToArray() -join "`n")
+    } else {
+        [void]$process.Start()
+
+        # Read both pipes asynchronously to prevent the child from blocking on a full buffer.
+        $outTask = $process.StandardOutput.ReadToEndAsync()
+        $errTask = $process.StandardError.ReadToEndAsync()
+
+        $killed = $false
+        if (-not $process.WaitForExit($TimeoutSec * 1000)) {
+            try { $process.Kill($true) } catch { }
+            $process.WaitForExit(5000) | Out-Null
+            $killed = $true
+        }
+        $stopwatch.Stop()
+
+        $stdout = $outTask.GetAwaiter().GetResult()
+        $stderr = $errTask.GetAwaiter().GetResult()
     }
-    $stopwatch.Stop()
-
-    $stdout = $outTask.GetAwaiter().GetResult()
-    $stderr = $errTask.GetAwaiter().GetResult()
 
     $writer = [System.IO.StreamWriter]::new($LogTo, $false, [System.Text.UTF8Encoding]::new($false))
     try {

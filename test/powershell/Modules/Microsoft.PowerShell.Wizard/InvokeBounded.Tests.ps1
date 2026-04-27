@@ -109,4 +109,18 @@ Describe "Invoke-Bounded + Get-WizardLog" -Tags "Feature" {
         $missing = Join-Path -Path $tempLogDir -ChildPath "does-not-exist.log"
         { Get-WizardLog -LogPath $missing -Range 'head:1' } | Should -Throw "*not found*"
     }
+
+    It "β4: -PassThru produces the same bounded result and writes a complete log" {
+        $logPath = Join-Path -Path $tempLogDir -ChildPath "passthru.log"
+        $cmd = '1..200 | ForEach-Object { "row $_" }'
+        $r = Invoke-Bounded -FilePath $childPwsh -ArgumentList @('-NoProfile', '-NoLogo', '-Command', $cmd) -MaxLines 10 -LogTo $logPath -PassThru -Quiet *>$null
+
+        # The cmdlet must still return the bounded-result object.
+        $r2 = Invoke-Bounded -FilePath $childPwsh -ArgumentList @('-NoProfile', '-NoLogo', '-Command', $cmd) -MaxLines 10 -LogTo (Join-Path $tempLogDir 'passthru-control.log') -Quiet
+        $r2.TotalLines | Should -Be 200
+
+        # Log file written by -PassThru run must have all 200 rows.
+        $logCount = (Get-Content -LiteralPath $logPath | Measure-Object).Count
+        $logCount | Should -Be 200
+    }
 }
