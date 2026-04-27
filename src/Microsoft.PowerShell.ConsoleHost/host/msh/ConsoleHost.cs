@@ -1797,8 +1797,8 @@ namespace Microsoft.PowerShell
             _readyForInputTimeInMS = (DateTime.Now - Process.GetCurrentProcess().StartTime).TotalMilliseconds;
 #endif
 
-            DoRunspaceInitialization(args);
             _wizardControlServer ??= WizardControlServer.StartIfEnabled(this);
+            DoRunspaceInitialization(args);
         }
 
         internal WizardControlSnapshot GetWizardControlSnapshot()
