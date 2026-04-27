@@ -124,6 +124,23 @@ Describe "Get-RepoProfile, Update-RepoDigest, Measure-RepoSearch" -Tags "Feature
         Test-Path -LiteralPath $r.OutFile | Should -BeTrue
         $content = Get-Content -LiteralPath $r.OutFile -Raw
         $content | Should -Match 'main\.py|tests'
+        # β5: managed-block markers are present so subsequent runs preserve hand-written content.
+        $content | Should -Match '<!-- wizard-managed-block:start -->'
+        $content | Should -Match '<!-- wizard-managed-block:end -->'
+    }
+
+    It "Update-RepoDigest preserves user content outside the managed block on regeneration" {
+        $r = Update-RepoDigest -Path $Repo
+        $userAddition = "`n`n## User addition`n- This line must survive regeneration.`n"
+        $original = Get-Content -LiteralPath $r.OutFile -Raw
+        ($original + $userAddition) | Set-Content -LiteralPath $r.OutFile -Encoding utf8 -NoNewline
+
+        $r2 = Update-RepoDigest -Path $Repo
+        $regenerated = Get-Content -LiteralPath $r2.OutFile -Raw
+        $regenerated | Should -Match 'This line must survive regeneration'
+        # The managed block should still be a single pair of markers (no duplicates).
+        ([regex]::Matches($regenerated, '<!-- wizard-managed-block:start -->')).Count | Should -Be 1
+        ([regex]::Matches($regenerated, '<!-- wizard-managed-block:end -->')).Count | Should -Be 1
     }
 
     It "Measure-RepoSearch returns at least one tool result" {
