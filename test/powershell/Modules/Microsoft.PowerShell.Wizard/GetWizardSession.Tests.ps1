@@ -67,7 +67,11 @@ Describe "Get-WizardSession" -Tags "Feature" {
         $result.PipeName | Should -BeExactly $custom
         $result.SessionRecord | Should -Match '\\WizardPowerShell\\sessions\\\d+\.json$'
         $result.LogDir | Should -Match '\\WizardPowerShell\\logs$'
-        $result.HookHostStatus | Should -BeExactly 'disabled'
+        # Phase 6: hook-host status is 'idle' when the wizard pwsh is up but no hooks have
+        # fired yet, 'warm (N hooks)' once hooks have been invoked, and 'disabled' if the
+        # pipe lookup fails. The freshly-spawned subprocess in this test won't have invoked
+        # any hooks, so 'idle' is the expected steady state.
+        $result.HookHostStatus | Should -BeIn @('idle', 'disabled')
         $result.ConsoleEncoding | Should -BeExactly 'utf-8'
         $result.OutputEncoding | Should -BeExactly 'utf-8'
         $result.NativeErrorPreference | Should -BeTrue
