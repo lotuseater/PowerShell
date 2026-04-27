@@ -40,7 +40,7 @@ When inactive, the host behaves exactly like upstream PowerShell.
 
 | Cmdlet | What |
 | ------ | ---- |
-| `Invoke-Bounded -FilePath <exe> -ArgumentList @(…) -MaxLines 80 -TimeoutSec 120 [-LogTo <path>] [-Quiet] [-MergeStdErr]` | Run a child process, stream full stdout+stderr to a log under `%LOCALAPPDATA%\WizardPowerShell\logs\`, return a `WizardBoundedResult` with `ExitCode`, `Head`, `Tail`, `LogPath`, `TotalLines`, `TruncatedLines`, `Duration`, `KilledByTimeout`. |
+| `Invoke-Bounded -FilePath <exe> -ArgumentList @(…) -MaxLines 80 -TimeoutSec 120 [-LogTo <path>] [-Quiet] [-MergeStdErr] [-PassThru]` | Run a child process, stream full stdout+stderr to a log under `%LOCALAPPDATA%\WizardPowerShell\logs\`, return a `WizardBoundedResult` with `ExitCode`, `Head`, `Tail`, `LogPath`, `TotalLines`, `TruncatedLines`, `Duration`, `KilledByTimeout`. **`-PassThru`** (β4) line-streams each child stdout/stderr line to the host as it arrives, so the agent sees progress on long builds while still receiving the bounded result at the end. |
 | `Get-WizardLog -LogPath <path> -Range head:N\|tail:N\|lines:A-B\|grep:PATTERN` | Fetch a slice of the on-disk log on demand. |
 
 ### Signal bus (over the named pipe)
@@ -48,7 +48,7 @@ When inactive, the host behaves exactly like upstream PowerShell.
 | Cmdlet | What |
 | ------ | ---- |
 | `Publish-WizardSignal -Topic <name> -Data <object> [-Ring 256]` | Push an event onto a per-topic ring buffer. |
-| `Read-WizardSignal -Topic <name> [-Since <seq>] [-Limit 64]` | Read events with seq > Since. |
+| `Read-WizardSignal -Topic <name> [-Since <seq>] [-Limit 64] [-WaitMs <ms>] [-PollIntervalMs 100]` | Read events with seq > Since. **`-WaitMs N`** (β2) blocks up to N ms (client-side polling at `-PollIntervalMs`) until new events arrive, then returns. Cheaper than busy-waiting in an agent loop body. |
 | `Start-MonitoredProcess -FilePath <exe> -ArgumentList @(…) [-Topic <name>] [-HeartbeatSeconds 2]` | Launch a child detached; publish `process.started` / `process.heartbeat` / `process.exited` events to the topic. |
 
 ### Bash compatibility
@@ -62,8 +62,9 @@ When inactive, the host behaves exactly like upstream PowerShell.
 | Cmdlet | What |
 | ------ | ---- |
 | `Invoke-WizardHook -Name <hook> [-Payload <object>] [-TimeoutMs 30000]` | JSON-RPC over the local pipe to a warm Python child. The first call lazy-spawns `py -3.14 -m wizard_mcp.hook_host`; subsequent calls reuse the warm process. |
+| `Initialize-WizardHookHost -Hooks @('hook1','hook2','...') [-TimeoutMs 30000]` | **β3.** Eagerly pre-import named hook modules in the warm Python child. Eliminates the cold-import cost on the FIRST `hook.invoke` of each name (~200-500 ms for `cognitive_pulse`). Recommended startup line for an agent-driven session: `Initialize-WizardHookHost @('cognitive_pulse','pretool_cache')`. |
 
-Wiring on the WizardErasmus side: drop `tools/wizard/hook_host_reference.py` into `Wizard_Erasmus/src/mcp/hook_host.py`, register your hook callables in the `HOOKS` dict, and (optionally) point `$env:WIZARD_HOOKHOST_MODULE` at a different module path. Each callable runs inside the warm child — pay the import cost once per shell, not once per hook fire.
+Wiring on the WizardErasmus side: drop `tools/wizard/hook_host_reference.py` into `Wizard_Erasmus/src/mcp/hook_host.py`, register your hook callables in the `HOOKS` / `HOOK_PATHS` dispatch table, and (optionally) point `$env:WIZARD_HOOKHOST_MODULE` at a different module path. Each callable runs inside the warm child — pay the import cost once per shell, not once per hook fire. The shipped Wizard_Erasmus implementation is on feature branch `wizard/hook-host-and-trust-regex` (commit `461f443`).
 
 The warm child is killed automatically when the host pwsh exits (`WizardControlServer.Dispose()` calls `DisposeHookHost()`).
 
@@ -120,6 +121,7 @@ Useful when a hook or skill needs to call Claude programmatically — e.g. to su
 | `cognitive.pulse`                        | rewired cognitive_pulse_hook (Phase 9a, live) | The full pulse block; the prompt-submit injection becomes a 1-line pointer. |
 | `wizard.hookhost.respawn`                | Phase-6 hook host (live)       | `{ name, reason, at }`                                                              |
 | `wizard.ant.query`                       | `Invoke-AntQuery`              | `{ model, promptHead, maxTokens, ts }`                                              |
+| `wizard.bashcompat.unsupported`          | `Invoke-BashCompat` (when input falls outside the supported subset) | `{ command, reason }` |
 
 ---
 
@@ -142,6 +144,20 @@ What hooks **can** do safely:
 The user can fetch the body on demand via `Read-WizardSignal -Topic cognitive.pulse` (or via a planned `mcp__wizard__check_pulse`).
 
 Use `tools/wizard/Install-WizardSettings.ps1` (shipped) — backs up `settings.json` to `settings.json.bak-<utc>` and supports `-DryRun` / `-Restore`. Already applied for `cognitive_pulse` and `pretool_cache`; the kill switch `$env:WIZARD_HOOKS_REWIRED='0'` reverts to the cold-spawn original without needing `-Restore`.
+
+---
+
+## Recommended startup snippet (drops the first-turn cold-import)
+
+For agent-driven sessions, add this to your `$PROFILE` or `tools/wizard/Install-WizardPwsh.ps1` rollout. It fires once per shell, well before the first model turn:
+
+```powershell
+if ($env:WIZARD_PWSH_CONTROL -eq '1') {
+    Initialize-WizardHookHost -Hooks @('cognitive_pulse','pretool_cache') -ErrorAction SilentlyContinue | Out-Null
+}
+```
+
+Verify after one Claude turn: `Send-WizardControlRequest -Payload @{command='hook.list'}` should show `cognitive_pulse` with `calls > 0` and `p50ms` ≤ 50.
 
 ---
 
