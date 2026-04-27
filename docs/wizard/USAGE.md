@@ -85,6 +85,14 @@ if ($null -eq $prior) {
 }
 ```
 
+### Anthropic CLI integration
+
+| Cmdlet | What |
+| ------ | ---- |
+| `Invoke-AntQuery -Prompt <text> [-Model <id>] [-MaxTokens 1024] [-System <text>] [-AntPath <path>] [-TimeoutSec 60]` | One-shot Claude API query through `ant` (github.com/anthropics/anthropic-cli), bounded via Invoke-Bounded. Returns `WizardAntResponse` with `Content`, `Model`, `UsageInput`, `UsageOutput`, `StopReason`, `DurationMs`, `LogPath`. Locates the binary via `-AntPath`, `$env:WIZARD_ANT_PATH`, or `Get-Command ant`. Publishes `wizard.ant.query` signal for audit. |
+
+Useful when a hook or skill needs to call Claude programmatically — e.g. to summarise a long error trace or reformat build output — without going through the Claude Code TUI. See also: `tools/wizard/templates/skills/sync-wizard-optimizations/SKILL.md` for a skill that uses it.
+
 ### AI search & repo profile
 
 | Cmdlet | What |

@@ -1,245 +1,110 @@
 # Wizard PowerShell — Optimization Plan
+_Refreshed 2026-04-27. Tracking branch: `wizard_power_shell` (~16 commits ahead of master)._
 
-_Last updated: 2026-04-27. Tracking branch: `wizard_power_shell`._
+Mirror of `C:\Users\Oleh\.claude\plans\please-see-our-custom-purring-piglet.md`. The plan file is the live document; this is the in-repo snapshot for offline readers.
 
-Companion to [`RESEARCH.md`](./RESEARCH.md). That doc explains **why**; this one is the **what / how / in what order**.
+## Context
 
----
-
-## Goal
-
-Turn the `WizardControlServer` seed in this fork into a small, opt-in **agent runtime** that:
-
-1. Absorbs per-hook Python cold-spawn cost (latency + tokens).
-2. Bounds verbose process output before it hits the model context (tokens).
-3. Streams structured signals to agents over the existing pipe instead of stdout (tokens + reliability).
-4. Normalises Windows-shell quirks (UTF-8, native error semantics, bash idioms) so bash-trained agents stop tripping (reliability).
+Extends the fork's existing `WizardControlServer` (named-pipe JSON-RPC, opt-in via `WIZARD_PWSH_CONTROL=1`) into a small **agent runtime**: hook latency absorbed by a warm Python child, build/test output bounded before it hits the model, signals replace OCR polling, bash idioms translated, AI search and AI-contract templates surfaced, and now an `ant`-CLI integration vector.
 
 All new behaviour is gated behind `WIZARD_PWSH_CONTROL=1`. Without that env var the fork behaves exactly like upstream PowerShell.
 
 ---
 
-## Design constraints
+## Status snapshot
 
-- **Don't break upstream-merge.** No changes to default cmdlet behaviour, formatters, parser, or PSReadLine outside the env-var-gated startup path.
-- **Don't fork the runtime.** Reuse `WizardControlServer.JsonRpcSession` framing for new verbs; reuse `Install-WizardPwsh.ps1` deployment + rollback.
-- **Don't migrate the hook fleet eagerly.** Phase 6 unlocks the runtime; migration of the ~28 hooks in `Wizard_Erasmus` is a downstream effort (one hook at a time, after dogfood).
-- **Phase boundaries are ship boundaries.** Each phase ends with: build green, focused Pester pass, single commit on `wizard_power_shell`.
+| Phase | Subject                                                                          | Commit       |
+| ----- | -------------------------------------------------------------------------------- | ------------ |
+| 0     | `RESEARCH.md` + `PLAN.md`                                                        | `893d318a`   |
+| 1     | UTF-8 + native-error startup hardening                                           | `a5b51441`   |
+| 2     | `Microsoft.PowerShell.Wizard` module + `Get-WizardSession`                       | `4a512319`   |
+| 3     | `Invoke-Bounded` + `Get-WizardLog`                                               | `11faed36`   |
+| 4 (C#)| Signal-channel verbs in `WizardControlServer.cs`                                  | `2381187c`   |
+| 4 (PS)| `Publish-/Read-WizardSignal`, `Start-MonitoredProcess`, signal tests             | `e92879eb`   |
+| 5     | `Invoke-BashCompat` + `bash`/`sh` aliases under `WIZARD_PWSH_CONTROL`             | `9d878e10`   |
+| 7     | AI-search, repo-profile, digest, benchmark cmdlets; legacy plan superseded        | `cde6abfc`   |
+| 8     | Repo AI-contract templates + `Install-RepoAIContract.ps1`                         | `123b9fd6`   |
+| 11    | `Test-WizardBuildPrereqs` + `USAGE.md`                                            | `eb2546cd`   |
+| 11+   | `Use-WizardLock` / `Clear-WizardLock` idempotency sentinel                        | `822c8332`   |
+| 12    | Codex parity templates + `wizard-loop-broadcast` skill                            | `1b9b2372`   |
+| 11++  | `Set-ClaudeTrust` (pre-marks folders to bypass Claude Code's trust prompt)        | `77599b15`   |
+| 6     | Persistent Python hook host (`hook.*` verbs, warm child, NDJSON, latency stats)   | `1c25f753`   |
+| 9a-fix| `Install-WizardSettings.ps1` preserves original command + try/catch fallback      | `587b16a1`   |
+| 9a    | Live `cognitive_pulse` + `pretool_cache` rewires applied (settings.json)          | _operational, backups at `~/.claude/settings.json.bak-<utc>`_ |
+| 9b    | `Install-RepoAIContract` deployed to 8 active repos                                | _operational_ |
+| ant   | `Invoke-AntQuery` cmdlet wrapping `ant` (github.com/anthropics/anthropic-cli)     | _pending commit_ |
 
----
+**Test count**: 64 Pester tests across 11 suites (60-1 expected-skip + 4 new). All wizard suites green.
 
-## Phase 0 — Save research & plan into the fork ✅
-
-- [x] Write [`docs/wizard/RESEARCH.md`](./RESEARCH.md).
-- [x] Write [`docs/wizard/PLAN.md`](./PLAN.md) (this file).
-- [ ] Commit `docs(wizard): research findings and optimization plan`.
-
----
-
-## Phase 1 — Startup hardening (smallest, ships first)
-
-**Why**: Eliminates the easiest token-loss class (mojibake) and the easiest reliability class (native errors not breaking chains). Cheapest possible first commit — earns trust that the env-var gate works as advertised.
-
-**Files**
-
-- `src/Microsoft.PowerShell.ConsoleHost/host/msh/ConsoleHost.cs` — add a small `ApplyWizardStartupHardening()` private method called immediately after `WizardControlServer.StartIfEnabled` succeeds.
-- `test/powershell/Host/WizardStartup.Tests.ps1` — new Pester file.
-
-**Steps**
-
-1. In `ConsoleHost.cs`, add (under `if (Environment.GetEnvironmentVariable("WIZARD_PWSH_CONTROL") == "1")`):
-   - `[Console]::InputEncoding = new UTF8Encoding(false)`
-   - `[Console]::OutputEncoding = new UTF8Encoding(false)`
-   - Push `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` onto the initial runspace via the same mechanism the host already uses for setting prefs.
-   - Push `$PSNativeCommandUseErrorActionPreference = $true`.
-   - If `Console.IsInputRedirected`, skip auto-loading PSReadLine.
-2. Add Pester test that:
-   - Launches `pwsh -NoProfile` with `WIZARD_PWSH_CONTROL=1`, runs `python -c "print('é')"` over stdin, asserts the byte sequence in stdout is the UTF-8 encoding of `é`, not cp1252 mojibake.
-   - Launches without the env var, asserts no behaviour change vs. upstream baseline (input/output encoding unchanged).
-3. `Start-PSBuild` (or `Start-PSBuild -Clean` if needed). Run `Invoke-Pester test/powershell/Host/WizardStartup.Tests.ps1`.
-4. Commit `feat(wizard): UTF-8 + native-error startup hardening under WIZARD_PWSH_CONTROL`.
-
-**Done when**: build green, Pester green, manual smoke (`pwsh.exe` produced by the build prints UTF-8 cleanly under the env var, identical to upstream without it).
+**Cmdlet count** (export from `Microsoft.PowerShell.Wizard`):
+`Get-WizardSession`, `Invoke-Bounded`, `Get-WizardLog`, `Publish-WizardSignal`, `Read-WizardSignal`, `Start-MonitoredProcess`, `Invoke-BashCompat`, `Find-Code`, `Find-Repos`, `Find-CodeAcrossRepos`, `Get-AIContext`, `Get-RepoProfile`, `Invoke-RepoBuild`, `Invoke-RepoTest`, `Update-RepoDigest`, `Measure-RepoSearch`, `Test-WizardBuildPrereqs`, `Use-WizardLock`, `Clear-WizardLock`, `Set-ClaudeTrust`, `Invoke-WizardHook`, `Invoke-AntQuery` (22).
 
 ---
 
-## Phase 2 — Wizard cmdlet module skeleton
+## Critical-files cheat sheet
 
-**Why**: Establishes a place to put the cmdlets the next phases need, and lets us pre-load it once per process instead of from each hook.
+Routine Wizard work touches **only** these files. Anything else — including the 9-10 k-LOC files in `System.Management.Automation/` — is wasted tokens and rebuild time.
 
-**Files**
+### C# (assembly: `Microsoft.PowerShell.ConsoleHost.dll`)
 
-- `src/Modules/Microsoft.PowerShell.Wizard/Microsoft.PowerShell.Wizard.psd1`
-- `src/Modules/Microsoft.PowerShell.Wizard/Microsoft.PowerShell.Wizard.psm1`
-- `src/Modules/Microsoft.PowerShell.Wizard/Get-WizardSession.ps1` (advanced function for now; promote to compiled cmdlet only if perf demands)
-- Update SDK manifest / `build.psm1` so the module is copied into `$PSHOME/Modules` during `Start-PSBuild`.
-- Pre-load hook in `ConsoleHost.cs` (alongside Phase 1 hardening).
+| File | Read this much |
+| ---- | -------------- |
+| `src/Microsoft.PowerShell.ConsoleHost/host/msh/WizardControlServer.cs` | `HandleRequest()` switch ~line 175. New verbs go between cases ~188-217. `IsEnabled` accessor at top. `SignalEvent` struct after the dispatchers. ~700 LOC. |
+| `src/Microsoft.PowerShell.ConsoleHost/host/msh/WizardControlServer.HookHost.cs` (partial) | `HookInvoke` ~line 118 (auto-registers on first invoke). `HookHostManager` nested class. `HookRecord` latency stats. ~470 LOC. |
+| `src/Microsoft.PowerShell.ConsoleHost/host/msh/ConsoleHost.cs` (3 188 LOC, **already partial**) | Wizard server start: 1807. Hardening: 1808. PSReadLine guard: 1695. Dispose: 1338. Field decl: 3133. **Do not** add more code here — split into `ConsoleHost.Wizard.cs` if needed. |
 
-**`Get-WizardSession` returns** an object with: `Pid`, `PipeName`, `LogDir`, `HookHostStatus` (`disabled` for now — will fill in Phase 6), `Started`, `WizardControlEnabled`.
+### Module (auto-deploys via `<Content Include="..\Modules\Shared\**\*">`)
 
-**Tests**
+| File | Purpose |
+| ---- | ------- |
+| `src/Modules/Shared/Microsoft.PowerShell.Wizard/Microsoft.PowerShell.Wizard.psd1` | Manifest. Update `FunctionsToExport` per phase. |
+| `src/Modules/Shared/Microsoft.PowerShell.Wizard/Microsoft.PowerShell.Wizard.psm1` | Loader. Dot-source new `*.ps1`s; add to `Export-ModuleMember`. |
+| `src/Modules/Shared/Microsoft.PowerShell.Wizard/*.ps1` | One file per cmdlet. |
 
-- `test/powershell/Modules/Microsoft.PowerShell.Wizard/GetWizardSession.Tests.ps1` asserts shape under env var, returns nothing/errors cleanly without it.
+### Tests (Pester 5)
 
-**Commit**: `feat(wizard): scaffold Microsoft.PowerShell.Wizard module + Get-WizardSession`.
+`test/powershell/Host/{WizardControl,WizardStartup}.Tests.ps1` and `test/powershell/Modules/Microsoft.PowerShell.Wizard/{GetWizardSession,InvokeBounded,SignalChannel,InvokeBashCompat,WizardLock,SetClaudeTrust,AISearch,HookHost,TestBuildPrereqs}.Tests.ps1`.
 
----
+### Run-loop (no full build needed for PS-only changes)
 
-## Phase 3 — `Invoke-Bounded` + `Get-WizardLog`
-
-**Why**: Highest-impact stdout-token reduction. Every `cmake`/`ninja`/`pytest` run currently sends hundreds of KB of build output back to the model. Replace with head + tail + log path.
-
-**Files**
-
-- `src/Modules/Microsoft.PowerShell.Wizard/Invoke-Bounded.ps1` (start as advanced function)
-- `src/Modules/Microsoft.PowerShell.Wizard/Get-WizardLog.ps1`
-- `src/Modules/Microsoft.PowerShell.Wizard/Tail-WizardLog.ps1`
-- Tests: `test/powershell/Modules/Microsoft.PowerShell.Wizard/InvokeBounded.Tests.ps1`
-
-**Contract — `Invoke-Bounded`**
-
-| Parameter      | Default                                                  | Notes                                          |
-| -------------- | -------------------------------------------------------- | ---------------------------------------------- |
-| `-FilePath`    | required                                                 | Native exe path.                               |
-| `-Args`        | `@()`                                                    |                                                |
-| `-MaxBytes`    | `16384`                                                  | Returned-to-stdout cap.                        |
-| `-MaxLines`    | `80`                                                     | Head **and** tail line cap.                    |
-| `-Timeout`     | `120` s                                                  | Hard kill at deadline.                         |
-| `-LogTo`       | `$env:LOCALAPPDATA\WizardPowerShell\logs\<pid>-<utc>.log` |                                                |
-| `-WorkingDir`  | `$PWD`                                                   |                                                |
-| `-Quiet`       | `$false`                                                 | If set, suppress head/tail in stdout — only object. |
-
-**Returns** a `WizardBoundedResult` with: `ExitCode`, `Head` (first N lines), `Tail` (last N lines), `LogPath`, `TruncatedLines`, `Duration`, `KilledByTimeout`.
-
-**`Get-WizardLog` / `Tail-WizardLog`** — fetch on demand. `Get-WizardLog -LogPath … -Range 'head:120'`, `'tail:200'`, `'lines:1000-1100'`, or `'grep:"error\\b" -Context 5'`.
-
-**Tests**
-
-- Run a script that emits 100 000 lines; assert log has all of them, returned object has 80 head + 80 tail.
-- Run a 5 s sleep with `-Timeout 1`; assert `KilledByTimeout=$true`, exit 124-equivalent.
-- `Get-WizardLog -Range 'tail:5'` returns the last 5 lines verbatim.
-
-**Commit**: `feat(wizard): Invoke-Bounded + Get-WizardLog for token-bounded execution`.
+1. Edit `.ps1` under `src/Modules/Shared/Microsoft.PowerShell.Wizard/`.
+2. `cp` into `src/powershell-win-core/bin/Debug/net11.0/win7-x64/publish/Modules/Microsoft.PowerShell.Wizard/`.
+3. `Invoke-Pester -Path test/powershell/Modules/Microsoft.PowerShell.Wizard/<NewSuite>.Tests.ps1`.
+4. Once green, `Start-PSBuild -Configuration Debug` to confirm the build glob picks it up too.
+5. `analyze_git_diff` → commit.
 
 ---
 
-## Phase 4 — Signal channel + `Start-MonitoredProcess`
+## Anthropic-CLI integration
 
-**Why**: Replaces OCR (`visual_verify_hook`, `dab_wait_idle`) with a structured event stream for process state — agents poll JSON instead of pixels.
+A separate effort at `C:\Users\Oleh\Documents\GitHub\Antropic\anthropic-cli` is building / spreading a custom version of the Go-based `ant` CLI (the Anthropic API CLI, not Claude Code TUI). Phase ant: ship a Wizard-side `Invoke-AntQuery` cmdlet that wraps `ant messages create`, bounded via Invoke-Bounded, audited via the signal bus. Locates the binary via `-AntPath` / `$env:WIZARD_ANT_PATH` / `Get-Command ant`.
 
-**Files**
-
-- `src/Microsoft.PowerShell.ConsoleHost/host/msh/WizardControlServer.cs` — extend dispatch with `signal.publish` (writes), `signal.subscribe` (reads + long-poll cursor), `signal.list` (topic enumeration). Per-topic ring buffer (default 256 entries).
-- `src/Modules/Microsoft.PowerShell.Wizard/Start-MonitoredProcess.ps1` — wraps `Start-Process`, posts `process.started`, `process.heartbeat` (every 2 s), `process.stalled` (no output for N s), `process.exited` to the signal bus.
-- `src/Modules/Microsoft.PowerShell.Wizard/Publish-WizardSignal.ps1` / `Read-WizardSignal.ps1` — convenience wrappers over the `signal.*` verbs.
-
-**Topics (initial)**
-
-| Topic            | Schema                                                                               |
-| ---------------- | ------------------------------------------------------------------------------------ |
-| `process.*`      | `{ pid, command, args, state, exitCode?, durationMs?, lastOutputAt? }`               |
-| `wizard.startup` | `{ version, pipeName, encodings, modulesLoaded[] }`                                  |
-| `hook.*`         | _(reserved for Phase 6)_                                                             |
-
-**Tests**
-
-- Pester subscriber-publisher round-trip in two runspaces.
-- Long-poll cursor advances correctly across reconnects.
-
-**Commit**: `feat(wizard): signal channel + Start-MonitoredProcess`.
+Use case: hooks or skills that need to call Claude programmatically (summarise a stack trace, reformat build output, verify a hypothesis) without spawning a Claude Code TUI. The cmdlet is shipped; the binary itself is installed by the user (`go install github.com/anthropics/anthropic-cli/cmd/ant@latest` or via the parallel custom-build effort).
 
 ---
 
-## Phase 5 — `Invoke-BashCompat` + `bash`/`sh` aliases
+## Pending / deferred
 
-**Why**: Closes the bash-idiom parser-error class. Even partial coverage of the most common forms (`&&`, `||`, `;`, `|`, `head -n`, `tail -n`, `grep`, `2>&1`) eliminates most observed friction.
-
-**Files**
-
-- `src/Modules/Microsoft.PowerShell.Wizard/Invoke-BashCompat.ps1`
-- `src/Modules/Microsoft.PowerShell.Wizard/Microsoft.PowerShell.Wizard.psm1` — register `bash` / `sh` aliases when `WIZARD_PWSH_CONTROL=1` (and **only** then).
-- Tests: `BashCompat.Tests.ps1`.
-
-**Approach**: small, explicit translator — not a real bash AST.
-- Tokenise on `&&`, `||`, `;`, `|`, redirections.
-- `head -n N` → `Select-Object -First N`. `tail -n N` → `Select-Object -Last N`. `grep PAT` → `Select-String -Pattern PAT`. `2>&1` → `*>&1`. `&&` → `-and` chain via `if ($?) { … }`. `||` → `if (-not $?) { … }`.
-- Anything outside the supported subset: fall through to `pwsh -Command`, log a warning to a `wizard.bashcompat.unsupported` signal so we can prioritise next additions from real usage.
-
-**Tests**: each idiom + a fall-through case + the negative case (no env var → no alias registered).
-
-**Commit**: `feat(wizard): Invoke-BashCompat + bash/sh aliases under WIZARD_PWSH_CONTROL`.
+- **Wizard_Erasmus committed work**: `src/mcp/hook_host.py` (warm-host shim) and `ai_wrappers/idle_watch_loop.py` regex fix were written but stayed uncommitted on master because the user has unrelated WIP intermixed. The user owns staging + committing alongside their other in-flight changes.
+- **ConsoleHost.Wizard.cs split**: when `WizardControlServer.cs` crosses ~1 000 LOC (Phase 6 pushed it to ~700), break out the next subsystem into a new partial. Same trick available for `ConsoleHost.cs` (already partial since line 42).
+- **End-to-end hook-rewire smoke**: there's no automated test that the live `cognitive_pulse` rewire delivers via the warm host (only unit tests of the C# verbs against a stub). Adding one would require launching a wizard pwsh subprocess and triggering a real UserPromptSubmit — heavy. Workaround: ad-hoc verification by inspecting `wizard.ant.query` signal counts / `hook.list` calls field after a normal session.
 
 ---
 
-## Phase 6 — Persistent Python hook host
+## Verification
 
-**Why**: Biggest latency win, biggest invisible-token-tax win. Each of the ~14 PowerShell-hosted Python hooks currently re-imports the `wizard_mcp` modules on cold spawn. Holding one warm child cuts that to a single import per shell lifetime.
+After every phase: `Start-PSBuild` clean, then `Invoke-Pester` against the **full** Wizard suite list; never just the new one.
 
-**This phase touches two repos.** Land the server-side first, then a single dogfood hook on the WizardErasmus side, then evaluate before mass-migrating.
-
-**This repo (PowerShell fork)**
-
-- `src/Microsoft.PowerShell.ConsoleHost/host/msh/WizardControlServer.cs` — new verbs `hook.register`, `hook.invoke`, `hook.list`, `hook.unregister`. Lifecycle for a single child `py -3.14 -m wizard_mcp.hook_host` over an anonymous pipe; lazy-spawn on first `hook.invoke`, kill on shell exit.
-- `src/Modules/Microsoft.PowerShell.Wizard/Invoke-WizardHook.ps1` — convenience cmdlet: `Invoke-WizardHook -Name pretool_cache -Payload (Get-Content -Raw input.json)` → JSON over the pipe → JSON back.
-- Tests: `HookHost.Tests.ps1` — register a noop hook, invoke 100×, assert mean latency under 50 ms.
-
-**WizardErasmus repo (separate, downstream)**
-
-- New `src/mcp/hook_host.py`: minimal JSON-RPC loop, `register(name, callable)`, dispatches by name. Imports the same `wizard_mcp.*` surface so registered hooks already have context warm.
-- Convert one low-risk hook (`pretool_cache_hook`) to call `register(...)` instead of running standalone. Update one entry in `C:\Users\Oleh\.claude\settings.json` from `& py -3.14 'C:\…\pretool_cache_hook.py'` to `Invoke-WizardHook -Name pretool_cache`.
-- Dogfood for one session, measure, only then plan the wider migration.
-
-**Commit (this repo)**: `feat(wizard): persistent Python hook host via control pipe`.
-
----
-
-## Phase 7 — Installer & docs polish
-
-**Files**
-
-- `tools/wizard/Install-WizardPwsh.ps1` — install the new module (copy `src/Modules/Microsoft.PowerShell.Wizard` to `$PSHOME\Modules\` if installing to a system location, or to the user's PSModulePath if user-scope), create the log dir, optionally append `WIZARD_PWSH_CONTROL=1` to the user environment (with a kill-switch `-NoEnableEnv`).
-- `docs/wizard/USAGE.md` — env vars, cmdlets, signal topics, recommended `settings.json` patterns, troubleshooting.
-- Push `wizard_power_shell` to origin.
-
-**Commit**: `chore(wizard): installer + USAGE.md, finalize wizard_power_shell rollout`.
-
----
-
-## Verification (cross-cutting)
-
-After every phase:
-- `Start-PSBuild` clean.
-- Existing `test/powershell/Host/WizardControl.Tests.ps1` still green — guarantees the original control verbs aren't broken by the new ones.
-- New phase-specific Pester suite green.
-
-Final end-to-end check (after Phase 7):
-1. `Install-WizardPwsh.ps1 -EnableEnvVar`, restart shell.
-2. `Get-WizardSession` → object with `WizardControlEnabled=$true`, `HookHostStatus='warm'` after first `Invoke-WizardHook`.
-3. From a Python REPL: open `\\.\pipe\wizard-pwsh-{PID}`, subscribe to `process.*`, run `Start-MonitoredProcess -FilePath cmake -Args build` in the shell, observe heartbeats land without OCR.
-4. `Invoke-Bounded -FilePath ninja -Args build` on a real WizardErasmus build dir; assert returned object's stdout under 16 KB and `Get-WizardLog -LogPath $r.LogPath -Range 'tail:200'` returns the build's tail end.
-5. Migrate `pretool_cache_hook` to `Invoke-WizardHook`, run a normal Claude turn, confirm cognitive-pulse output looks unchanged.
+Phase-specific (latest):
+- **Phase ant**: `Invoke-AntQuery -Prompt 'hi' -AntPath C:\does\not\exist\ant.exe` throws helpfully (covered in `TestBuildPrereqs.Tests.ps1`).
+- **Phase 9a**: open `~/.claude/settings.json`; the `cognitive_pulse` and `pretool_cache` hook commands should be the new two-arm form. To verify warm-host activation, run a normal Claude turn, then in a wizard pwsh: `Send-WizardControlRequest -Payload @{ command='hook.list' }` should show `cognitive_pulse` with `calls > 0`.
+- **Phase 9b**: `Get-Item C:\Users\Oleh\Documents\GitHub\Wizard_Erasmus\AGENTS.md` exists and is wizard-managed (`Get-Content … | Select-String 'wizard-managed-block'`).
 
 ---
 
 ## Out of scope
 
-- Rewriting any cmdlet's default formatter (would conflict with upstream merges).
-- Changing the parser, the language, or PSReadLine in non-controlled sessions.
-- Migrating all 28 hooks in WizardErasmus. Phase 6 enables the runtime; full migration is downstream.
-- Codex config changes. Codex inherits the system shell — once the user's `pwsh.exe` is the WizardErasmus shim, Codex benefits transparently.
-- Replacing OCR / `dab_*`. Phase 4 makes them less necessary; deciding whether to deprecate them is a separate decision in WizardErasmus.
-
----
-
-## Status snapshot
-
-| Phase | Status     | Commit                                                                             |
-| ----- | ---------- | ---------------------------------------------------------------------------------- |
-| 0     | in flight  | `docs(wizard): research findings and optimization plan` (pending)                  |
-| 1     | pending    | `feat(wizard): UTF-8 + native-error startup hardening under WIZARD_PWSH_CONTROL`   |
-| 2     | pending    | `feat(wizard): scaffold Microsoft.PowerShell.Wizard module + Get-WizardSession`    |
-| 3     | pending    | `feat(wizard): Invoke-Bounded + Get-WizardLog for token-bounded execution`         |
-| 4     | pending    | `feat(wizard): signal channel + Start-MonitoredProcess`                            |
-| 5     | pending    | `feat(wizard): Invoke-BashCompat + bash/sh aliases under WIZARD_PWSH_CONTROL`      |
-| 6     | pending    | `feat(wizard): persistent Python hook host via control pipe`                       |
-| 7     | pending    | `chore(wizard): installer + USAGE.md, finalize wizard_power_shell rollout`         |
+- Touching `System.Management.Automation` (the engine). Big files there are upstream concerns.
+- Changing default cmdlet behaviour outside the env-var-gated startup path. Stays clean against upstream merges.
+- Replacing OCR / `dab_*` outright. Phase 4's signals make them less necessary; deciding to deprecate is downstream in WizardErasmus.
+- Codex config beyond Phase 12. Codex inherits the system shell; the wizard shim's effects propagate transparently.

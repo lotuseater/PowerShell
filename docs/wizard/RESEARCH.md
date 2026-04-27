@@ -6,9 +6,12 @@ This document records what we observed on this Windows 11 PC about the way Claud
 
 ---
 
-## 1. Current state of the fork
+_See `PLAN.md` for the live phase ↔ commit map. This file captures the **findings** that motivated the plan; once a phase ships, it stops being "research" and moves to the plan / USAGE._
+
+## 1. Current state of the fork (snapshot 2026-04-27 start of work)
 
 - **Branch**: `wizard_power_shell`, 3 local commits past `master`, working tree clean.
+- The fork has since shipped 22 Wizard cmdlets and ~16 commits (see `PLAN.md` for the running map). The list below is the **starting** state — preserved as historical context for why the work began.
 - **Local commits** (newest first):
   - `c604643a` — `fix(consolehost): start wizard control before commands`. Re-orders startup so the named-pipe server is listening before runspace init / first prompt. Prevents a race where an external client could connect before the server bound.
   - `829b3e0c` — `chore(wizard): add controlled pwsh rollout helper`. Adds `tools/wizard/Install-WizardPwsh.ps1` (≈240 lines): writes a `wizard-pwsh.cmd` shim into `%USERPROFILE%\bin\`, optionally compiles a small `pwsh.exe` wrapper that sets `WIZARD_PWSH_CONTROL=1`, and optionally rewrites Windows Terminal's default profile to use the shim. Has rollback.
