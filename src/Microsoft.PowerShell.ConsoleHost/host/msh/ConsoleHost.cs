@@ -1335,6 +1335,8 @@ namespace Microsoft.PowerShell
 
                     _outputSerializer?.End();
                     _errorSerializer?.End();
+                    _wizardControlServer?.Dispose();
+                    _wizardControlServer = null;
 
                     if (_runspaceRef != null)
                     {
@@ -1796,6 +1798,27 @@ namespace Microsoft.PowerShell
 #endif
 
             DoRunspaceInitialization(args);
+            _wizardControlServer ??= WizardControlServer.StartIfEnabled(this);
+        }
+
+        internal WizardControlSnapshot GetWizardControlSnapshot()
+        {
+            string runspaceState = _runspaceRef?.Runspace?.RunspaceStateInfo.State.ToString() ?? string.Empty;
+            string windowTitle = string.Empty;
+            try
+            {
+                windowTitle = ui?.RawUI?.WindowTitle ?? string.Empty;
+            }
+            catch
+            {
+            }
+
+            return new WizardControlSnapshot(_isRunningPromptLoop, ShouldEndSession, runspaceState, windowTitle);
+        }
+
+        internal void WizardInterruptCurrentPipeline()
+        {
+            SpinUpBreakHandlerThread(shouldEndSession: false);
         }
 
         private static void OpenConsoleRunspace(Runspace runspace, bool staMode)
@@ -3050,6 +3073,7 @@ namespace Microsoft.PowerShell
         private WrappedSerializer _errorSerializer;
         private bool _displayDebuggerBanner;
         private DebuggerStopEventArgs _debuggerStopEventArgs;
+        private WizardControlServer _wizardControlServer;
         private bool _inPushedConfiguredSession;
         internal Pipeline runningCmd;
 
