@@ -18,8 +18,9 @@
 . $PSScriptRoot/Invoke-RepoTest.ps1
 . $PSScriptRoot/Update-RepoDigest.ps1
 . $PSScriptRoot/Measure-RepoSearch.ps1
+. $PSScriptRoot/Test-WizardBuildPrereqs.ps1
 
-Export-ModuleMember -Function 'Get-WizardSession', 'Invoke-Bounded', 'Get-WizardLog', 'Publish-WizardSignal', 'Read-WizardSignal', 'Start-MonitoredProcess', 'Invoke-BashCompat', 'Find-Code', 'Find-Repos', 'Find-CodeAcrossRepos', 'Get-AIContext', 'Get-RepoProfile', 'Invoke-RepoBuild', 'Invoke-RepoTest', 'Update-RepoDigest', 'Measure-RepoSearch'
+Export-ModuleMember -Function 'Get-WizardSession', 'Invoke-Bounded', 'Get-WizardLog', 'Publish-WizardSignal', 'Read-WizardSignal', 'Start-MonitoredProcess', 'Invoke-BashCompat', 'Find-Code', 'Find-Repos', 'Find-CodeAcrossRepos', 'Get-AIContext', 'Get-RepoProfile', 'Invoke-RepoBuild', 'Invoke-RepoTest', 'Update-RepoDigest', 'Measure-RepoSearch', 'Test-WizardBuildPrereqs'
 
 # Register bash / sh aliases ONLY when the wizard control plane is on. Otherwise leave the
 # user's PATH bash.exe alone — these aliases are agent-mode glue, not user-facing reskinning.
