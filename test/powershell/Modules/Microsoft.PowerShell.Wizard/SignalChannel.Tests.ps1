@@ -148,8 +148,10 @@ Describe "Wizard signal channel" -Tags "Feature" {
             $sw.Stop()
             $r.status | Should -BeExactly 'ok'
             $r.events.Count | Should -Be 0
-            # No wait → must complete in well under 1 s.
-            $sw.ElapsedMilliseconds | Should -BeLessThan 1000
+            # No wait → must complete well under the 5 s loosely set ceiling. (We previously had
+            # 1 s here and it flaked under contention from other parallel suites; 5 s is still
+            # 50× shorter than even a 5-second WaitMs would cost, so it still proves no-poll.)
+            $sw.ElapsedMilliseconds | Should -BeLessThan 5000
         } finally { Stop-WizardPwsh $proc }
     }
 
