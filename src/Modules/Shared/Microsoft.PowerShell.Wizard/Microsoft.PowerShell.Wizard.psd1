@@ -8,7 +8,7 @@ CompatiblePSEditions = @("Core")
 PowerShellVersion="7.0"
 RootModule="Microsoft.PowerShell.Wizard.psm1"
 Description="Opt-in agent runtime cmdlets for the wizard_power_shell fork. Active only when WIZARD_PWSH_CONTROL=1."
-FunctionsToExport = @("Get-WizardSession", "Invoke-Bounded", "Get-WizardLog")
+FunctionsToExport = @("Get-WizardSession", "Invoke-Bounded", "Get-WizardLog", "Publish-WizardSignal", "Read-WizardSignal", "Start-MonitoredProcess")
 CmdletsToExport = @()
 AliasesToExport = @()
 VariablesToExport = @()
