@@ -117,8 +117,9 @@ Useful when a hook or skill needs to call Claude programmatically — e.g. to su
 | `wizard.bashcompat.unsupported`          | `Invoke-BashCompat`            | `{ command, reason }`                                                              |
 | `wizard.broadcast`                       | Phase-10 broadcaster           | `{ at, recipients[], excluded[], prompt }`                                          |
 | `wizard.broadcast.ack`                   | Each looped instance           | `{ instance, repo, exitCode, tail, at }`                                            |
-| `cognitive.pulse`                        | _planned_ rewired cognitive_pulse_hook | The full pulse block; the prompt-submit injection becomes a 1-line pointer. |
-| `wizard.hookhost.respawn`                | _planned_ Phase-6 hook host    | `{ name, reason, at }`                                                              |
+| `cognitive.pulse`                        | rewired cognitive_pulse_hook (Phase 9a, live) | The full pulse block; the prompt-submit injection becomes a 1-line pointer. |
+| `wizard.hookhost.respawn`                | Phase-6 hook host (live)       | `{ name, reason, at }`                                                              |
+| `wizard.ant.query`                       | `Invoke-AntQuery`              | `{ model, promptHead, maxTokens, ts }`                                              |
 
 ---
 
@@ -140,7 +141,7 @@ What hooks **can** do safely:
 
 The user can fetch the body on demand via `Read-WizardSignal -Topic cognitive.pulse` (or via a planned `mcp__wizard__check_pulse`).
 
-Use `tools/wizard/Install-WizardSettings.ps1` once shipped — it backs up `settings.json` to `settings.json.bak-<utc>` and supports `-DryRun` / `-Restore`.
+Use `tools/wizard/Install-WizardSettings.ps1` (shipped) — backs up `settings.json` to `settings.json.bak-<utc>` and supports `-DryRun` / `-Restore`. Already applied for `cognitive_pulse` and `pretool_cache`; the kill switch `$env:WIZARD_HOOKS_REWIRED='0'` reverts to the cold-spawn original without needing `-Restore`.
 
 ---
 

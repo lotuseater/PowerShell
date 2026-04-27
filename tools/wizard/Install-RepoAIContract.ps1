@@ -92,10 +92,7 @@ function Copy-OrUpdate-Markdown {
 
     $existing = Get-Content -LiteralPath $TargetPath -Raw
     if ($existing -match [regex]::Escape($markerStart)) {
-        # Replace just our managed block.
-        $pattern = "$([regex]::Escape($markerStart)).*?$([regex]::Escape($markerEnd))"
-        $new = [regex]::Replace($existing, $pattern, [System.Text.RegularExpressions.Regex]::Escape($managed) -replace '\\(.)', '$1', 1)
-        # Simpler: just rewrite using string find/replace.
+        # Replace just our managed block via index-based substring (no regex pitfalls).
         $startIdx = $existing.IndexOf($markerStart)
         $endIdx = $existing.IndexOf($markerEnd, $startIdx)
         if ($startIdx -ge 0 -and $endIdx -gt $startIdx) {
