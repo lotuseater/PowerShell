@@ -57,6 +57,24 @@ When inactive, the host behaves exactly like upstream PowerShell.
 | ------ | ---- |
 | `Invoke-BashCompat -c '<command>'` | Translate a small bash subset (`&&`, `\|\|`, `;`, `\|`, `head -n`, `tail -n`, `grep`, `2>&1`, leading `cd DIR && …`) to PowerShell and execute. Falls back to `bash.exe` for anything outside the subset (publishing `wizard.bashcompat.unsupported`). Aliases `bash` and `sh` are registered automatically when `WIZARD_PWSH_CONTROL=1`. |
 
+### Idempotency locks
+
+| Cmdlet | What |
+| ------ | ---- |
+| `Use-WizardLock -Key <name> [-Note <text>] [-LockRoot <dir>]` | Sentinel-file gate. Returns `$null` if just acquired (first time), or the prior record if already held. Lock files live at `%LOCALAPPDATA%\WizardPowerShell\locks\<key>.lock`. Persistent across restarts. |
+| `Clear-WizardLock -Key <name>` | Release the lock. Use to re-arm a one-shot operation. |
+
+Pattern for "do this only once":
+
+```powershell
+$prior = Use-WizardLock -Key 'loop-relaunch-self' -Note 'Phase 10 self-handoff'
+if ($null -eq $prior) {
+    # First time — do the work.
+} else {
+    # Already done at $prior.AcquiredAt by PID $prior.AcquiredBy. Skip.
+}
+```
+
 ### AI search & repo profile
 
 | Cmdlet | What |
