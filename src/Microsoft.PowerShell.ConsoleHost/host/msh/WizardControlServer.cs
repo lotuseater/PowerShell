@@ -28,8 +28,6 @@ namespace Microsoft.PowerShell
         internal const string PipeEnvironmentVariable = "WIZARD_PWSH_CONTROL_PIPE";
         internal const int ProtocolVersion = 1;
 
-        private const int DefaultSignalRingSize = 256;
-
         private readonly ConsoleHost _host;
         private readonly string _pipeName;
         private readonly string _sessionPath;
@@ -39,13 +37,9 @@ namespace Microsoft.PowerShell
         private DateTimeOffset _lastRequestAt = DateTimeOffset.UtcNow;
         private bool _disposed;
 
-        // Signal bus: per-topic ring buffers, monotonic global sequence. All access under _signalLock.
-        // Hooks publish events here; subscribers (agents, the WizardErasmus side) poll over the pipe
-        // by topic + cursor. The whole point is to skip OCR / dab_wait_idle for state changes that
-        // the shell already knows about.
-        private readonly object _signalLock = new object();
-        private readonly Dictionary<string, Queue<SignalEvent>> _signals = new Dictionary<string, Queue<SignalEvent>>(StringComparer.Ordinal);
-        private long _nextSignalSeq;
+        // Signal-bus state moved to WizardControlServer.Signals.cs partial in β8 (2026-04-27).
+        // HookHost.cs's PublishSignalInternal still touches _signalLock / _signals / _nextSignalSeq,
+        // which are now declared in the Signals partial — accessible to all partials of this class.
 
         private WizardControlServer(ConsoleHost host, string pipeName, string sessionPath)
         {
@@ -262,169 +256,8 @@ namespace Microsoft.PowerShell
             };
         }
 
-        private string SignalPublish(JsonElement request)
-        {
-            string topic = GetString(request, "topic");
-            if (string.IsNullOrWhiteSpace(topic))
-            {
-                return JsonSerializer.Serialize(new { status = "error", error = "missing_topic" });
-            }
-
-            int ring = GetInt(request, "ring", DefaultSignalRingSize);
-            if (ring < 1) { ring = DefaultSignalRingSize; }
-
-            string dataJson = "null";
-            if (request.TryGetProperty("data", out JsonElement dataElement))
-            {
-                dataJson = dataElement.GetRawText();
-            }
-
-            long seq;
-            DateTimeOffset ts;
-            lock (_signalLock)
-            {
-                if (!_signals.TryGetValue(topic, out Queue<SignalEvent> queue))
-                {
-                    queue = new Queue<SignalEvent>(ring);
-                    _signals[topic] = queue;
-                }
-
-                while (queue.Count >= ring)
-                {
-                    queue.Dequeue();
-                }
-
-                seq = ++_nextSignalSeq;
-                ts = DateTimeOffset.UtcNow;
-                queue.Enqueue(new SignalEvent(seq, topic, ts, dataJson));
-            }
-
-            return JsonSerializer.Serialize(new { status = "ok", command = "signal.publish", topic, seq, ts });
-        }
-
-        private string SignalSubscribe(JsonElement request)
-        {
-            string topic = GetString(request, "topic");
-            if (string.IsNullOrWhiteSpace(topic))
-            {
-                return JsonSerializer.Serialize(new { status = "error", error = "missing_topic" });
-            }
-
-            long since = 0;
-            if (request.TryGetProperty("since", out JsonElement sinceElement) && sinceElement.TryGetInt64(out long parsedSince))
-            {
-                since = parsedSince;
-            }
-
-            int limit = GetInt(request, "limit", 64);
-            if (limit < 1) { limit = 1; }
-            if (limit > 1024) { limit = 1024; }
-
-            SignalEvent[] page;
-            long head;
-            int total;
-            lock (_signalLock)
-            {
-                if (!_signals.TryGetValue(topic, out Queue<SignalEvent> queue))
-                {
-                    page = Array.Empty<SignalEvent>();
-                    head = _nextSignalSeq;
-                    total = 0;
-                }
-                else
-                {
-                    page = queue.Where(e => e.Seq > since).Take(limit).ToArray();
-                    head = _nextSignalSeq;
-                    total = queue.Count;
-                }
-            }
-
-            // We re-emit each event with its `data` payload as raw JSON. Building a JsonNode tree
-            // and re-serializing would be more typesafe but allocates a lot per poll — at the
-            // expected polling cadence (every few seconds for process.heartbeat) string assembly is
-            // both cheaper and easier to reason about.
-            StringBuilder sb = new StringBuilder();
-            sb.Append("{\"status\":\"ok\",\"command\":\"signal.subscribe\",\"topic\":");
-            sb.Append(JsonSerializer.Serialize(topic));
-            sb.Append(",\"head\":").Append(head);
-            sb.Append(",\"total\":").Append(total);
-            sb.Append(",\"events\":[");
-            for (int i = 0; i < page.Length; i++)
-            {
-                if (i > 0) { sb.Append(','); }
-                SignalEvent e = page[i];
-                sb.Append("{\"seq\":").Append(e.Seq);
-                sb.Append(",\"topic\":").Append(JsonSerializer.Serialize(e.Topic));
-                sb.Append(",\"ts\":").Append(JsonSerializer.Serialize(e.Timestamp));
-                sb.Append(",\"data\":").Append(string.IsNullOrEmpty(e.DataJson) ? "null" : e.DataJson);
-                sb.Append('}');
-            }
-            sb.Append("]}");
-            return sb.ToString();
-        }
-
-        private string SignalList()
-        {
-            KeyValuePair<string, int>[] topics;
-            long head;
-            lock (_signalLock)
-            {
-                topics = _signals.Select(kv => new KeyValuePair<string, int>(kv.Key, kv.Value.Count)).ToArray();
-                head = _nextSignalSeq;
-            }
-
-            return JsonSerializer.Serialize(new
-            {
-                status = "ok",
-                command = "signal.list",
-                head,
-                topics = topics.Select(t => new { topic = t.Key, count = t.Value }).ToArray()
-            });
-        }
-
-        private string SignalClear(JsonElement request)
-        {
-            string topic = GetString(request, "topic");
-            int removed;
-            lock (_signalLock)
-            {
-                if (string.IsNullOrEmpty(topic))
-                {
-                    removed = _signals.Sum(kv => kv.Value.Count);
-                    _signals.Clear();
-                }
-                else if (_signals.TryGetValue(topic, out Queue<SignalEvent> queue))
-                {
-                    removed = queue.Count;
-                    _signals.Remove(topic);
-                }
-                else
-                {
-                    removed = 0;
-                }
-            }
-
-            return JsonSerializer.Serialize(new { status = "ok", command = "signal.clear", topic = topic ?? "*", removed });
-        }
-
-        private readonly struct SignalEvent
-        {
-            internal SignalEvent(long seq, string topic, DateTimeOffset timestamp, string dataJson)
-            {
-                Seq = seq;
-                Topic = topic;
-                Timestamp = timestamp;
-                DataJson = dataJson;
-            }
-
-            internal long Seq { get; }
-
-            internal string Topic { get; }
-
-            internal DateTimeOffset Timestamp { get; }
-
-            internal string DataJson { get; }
-        }
+        // SignalPublish / SignalSubscribe / SignalList / SignalClear and the SignalEvent struct
+        // moved to WizardControlServer.Signals.cs partial in β8.
 
         private static object Read(int maxLines)
         {
