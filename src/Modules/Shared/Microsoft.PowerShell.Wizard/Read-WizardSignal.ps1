@@ -8,13 +8,20 @@ function Read-WizardSignal {
 
     .DESCRIPTION
         Returns the response object: { status, command, topic, head, total, events[] }.
-        Caller advances `since` to the largest seq seen and polls again. No long-poll;
-        the server is single-instance per PID and unblocking polls is more important
-        than reducing poll count for the expected cadence (1-5s).
+        Caller advances `since` to the largest seq seen and polls again.
+
+        With `-WaitMs N` the cmdlet polls every `-PollIntervalMs` (default 100 ms) until
+        new events arrive or the wait deadline elapses, then returns. This is *client-side*
+        long-poll — the wizard pipe is single-instance per PID, so a server-side blocking
+        wait would serialize every other request behind it. Polling at 100 ms incurs ≤10
+        pipe round-trips per second, which is well within the wizard pipe's capacity.
 
     .EXAMPLE
         $r = Read-WizardSignal -Topic process.heartbeat -Since 0 -Limit 100
-        $r.events | ForEach-Object { $_.data.pid }
+
+    .EXAMPLE
+        # Block (with 5 s ceiling) until a new cognitive.pulse arrives.
+        $r = Read-WizardSignal -Topic cognitive.pulse -Since $lastSeq -WaitMs 5000
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -24,6 +31,8 @@ function Read-WizardSignal {
 
         [long] $Since = 0,
         [int]  $Limit = 64,
+        [int]  $WaitMs = 0,
+        [int]  $PollIntervalMs = 100,
         [string] $PipeName
     )
 
@@ -34,5 +43,23 @@ function Read-WizardSignal {
         limit   = $Limit
     }
 
-    Send-WizardControlRequest -Payload $payload -PipeName $PipeName
+    if ($WaitMs -le 0) {
+        return Send-WizardControlRequest -Payload $payload -PipeName $PipeName
+    }
+
+    if ($PollIntervalMs -lt 25) { $PollIntervalMs = 25 }
+
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($WaitMs)
+    $latest = $null
+    do {
+        $latest = Send-WizardControlRequest -Payload $payload -PipeName $PipeName
+        if ($latest.status -ne 'ok') { return $latest }
+        if ($latest.events -and $latest.events.Count -gt 0) { return $latest }
+        $remaining = ($deadline - [DateTime]::UtcNow).TotalMilliseconds
+        if ($remaining -le 0) { break }
+        $sleep = [Math]::Min([int]$remaining, $PollIntervalMs)
+        Start-Sleep -Milliseconds $sleep
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    return $latest
 }
