@@ -116,7 +116,7 @@ Useful when a hook or skill needs to call Claude programmatically — e.g. to su
 
 | Cmdlet | What |
 | ------ | ---- |
-| `Find-Code -Pattern <regex> [-Path <root>] [-MaxCount 120] [-Context 2] [-FilesOnly] [-Json] [-Compact] [-Include @('*.cs','*.py')]` | Ripgrep wrapper with broad ignore globs and bounded match count. |
+| `Find-Code -Pattern <regex> [-Path <root>] [-MaxCount 40] [-Context 2] [-FilesOnly] [-Json] [-Compact] [-Include @('*.cs','*.py')]` | Ripgrep wrapper with broad ignore globs and bounded match count. **Default `-MaxCount` is 40** (was 120 pre-2026-04-28 — emitted ~600 lines / ~5 KB / 1 k tokens by itself on a typical search). Bump explicitly when you genuinely want more. |
 | `Find-Repos [-Root @('C:\Users\Oleh\Documents\GitHub')]` | Find git working trees under one or more roots. |
 | `Find-CodeAcrossRepos -Pattern <regex> [-MaxPerRepo 40]` | Compose the two. |
 | `Get-AIContext -File <path> -StartLine <N> [-Radius 40]` | Streamed line-numbered slice for big files. |
