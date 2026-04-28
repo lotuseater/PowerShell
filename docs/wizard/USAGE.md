@@ -35,7 +35,7 @@ When inactive, the host behaves exactly like upstream PowerShell.
 | Cmdlet | What |
 | ------ | ---- |
 | `Get-WizardSession` | One-line snapshot of *this* process: PID, pipe name, log dir, `WizardControlEnabled`, `HookHostStatus`, encoding, native-error pref, started time. |
-| `Get-WizardSessions [-IncludeStale] [-SessionRoot <path>]` | **γ1.** Enumerates *all* wizard pwsh sessions on this machine by scanning `%LOCALAPPDATA%\WizardPowerShell\sessions\*.json`. Returns `WizardSessionEntry` records with `Pid`, `PipeName`, `Cwd`, `Executable`, `Started`, `IsAlive`. Stale entries (PID gone) excluded by default. Discovery primitive for agents that need to find a live wizard pipe by enumeration. |
+| `Get-WizardSessions [-Top 10] [-All] [-IncludeStale] [-SessionRoot <path>]` | **γ1.** Enumerates wizard pwsh sessions on this machine by scanning `%LOCALAPPDATA%\WizardPowerShell\sessions\*.json`. Returns `WizardSessionEntry` records sorted newest-first with `Pid`, `PipeName`, `Cwd`, `Executable`, `Started`, `IsAlive`. **Default emits the 10 most recent**; pass `-All` for the full list (often 30-50+ on a busy box) or `-Top N` to override. Stale entries (PID gone) excluded by default. Discovery primitive for agents that need to find a live wizard pipe by enumeration. |
 
 ### Python client
 
