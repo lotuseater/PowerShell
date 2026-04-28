@@ -152,6 +152,29 @@ Useful when a hook or skill needs to call Claude programmatically — e.g. to su
 | ------ | ---- |
 | `Send-WizardLoopWake -SessionId <sid> [-PipeName <name>]` | One-line wrapper around `Publish-WizardSignal -Topic wizard.loop.wake.<sid>`. Pairs with the WizardErasmus-side `python -m ai_wrappers.idle_watch_loop --wake <sid>` CLI — both publish the same topic. PowerShell users get a one-word command, Python users get the same effect from any shell. |
 
+### Start-WizardManagedTerminal (rev-4, live)
+
+| Cmdlet | What |
+| ------ | ---- |
+| `Start-WizardManagedTerminal -Provider <codex\|claude\|gemini> -ChildArgs <argv> -SessionId <sid> [-Title <text>] [-Cwd <path>] [-WtWindow <name>] [-NewWindow] [-Env <hashtable>]` | Spawn a wizard-controlled pwsh tab (or window) running the requested agent CLI. Replaces WizardErasmus's hand-rolled `pwsh -EncodedCommand` spawn dance with one cmdlet. Default = `wt.exe -w wizard-loops new-tab` so all loops collapse into one Windows Terminal window; `-NewWindow` opts into the legacy CreateNewConsole path when wt.exe is unavailable or you explicitly want a separate console. Returns `WizardManagedTerminalResult` with `Pid`, `Title`, `SessionId`, `Channel='wt_new_tab'\|'new_console'`, `Provider`, `Cwd`, `WtWindow`. |
+
+```powershell
+# Spawn a Claude loop tab as a sibling of any other wizard-loops tabs
+$r = Start-WizardManagedTerminal -Provider claude `
+    -ChildArgs @('--dangerously-skip-permissions') `
+    -SessionId 'claude-loop-1' -Title 'Claude Loop'
+$r.Pid; $r.Channel  # 'wt_new_tab' on hosts with wt.exe
+
+# Force a separate console window (audit / debug)
+Start-WizardManagedTerminal -Provider codex `
+    -ChildArgs @('resume') -SessionId 'codex-debug-1' -NewWindow
+```
+
+The WizardErasmus side shells out to this cmdlet by default (env var
+`WIZARD_USE_MANAGED_TERMINAL_CMDLET`, default on). Set
+`WIZARD_USE_MANAGED_TERMINAL_CMDLET=0` as a kill-switch to use the
+legacy in-process spawn path.
+
 ```powershell
 # Wake the loop driving managed terminal session claude-24624-…
 Send-WizardLoopWake -SessionId claude-24624-1777343499545
