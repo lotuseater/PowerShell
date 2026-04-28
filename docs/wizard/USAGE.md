@@ -35,6 +35,7 @@ When inactive, the host behaves exactly like upstream PowerShell.
 | Cmdlet | What |
 | ------ | ---- |
 | `Get-WizardSession` | One-line snapshot of *this* process: PID, pipe name, log dir, `WizardControlEnabled`, `HookHostStatus`, encoding, native-error pref, started time. |
+| `status.extended` (control-pipe verb, **γ2**) | Same shape as `status` plus `currentCommand`, `lastCommand`, `historyCount`. Lets DAB / agents see what's running in a tab right now without OCR. Call via `Send-WizardControlRequest -Payload @{ command = 'status.extended' }` or from Python: `WizardPwshClient(pid).status_extended()`. |
 | `Get-WizardSessions [-Top 10] [-All] [-IncludeStale] [-SessionRoot <path>]` | **γ1.** Enumerates wizard pwsh sessions on this machine by scanning `%LOCALAPPDATA%\WizardPowerShell\sessions\*.json`. Returns `WizardSessionEntry` records sorted newest-first with `Pid`, `PipeName`, `Cwd`, `Executable`, `Started`, `IsAlive`. **Default emits the 10 most recent**; pass `-All` for the full list (often 30-50+ on a busy box) or `-Top N` to override. Stale entries (PID gone) excluded by default. Discovery primitive for agents that need to find a live wizard pipe by enumeration. |
 
 ### Python client
@@ -140,6 +141,26 @@ Useful when a hook or skill needs to call Claude programmatically — e.g. to su
 | `wizard.hookhost.respawn`                | Phase-6 hook host (live)       | `{ name, reason, at }`                                                              |
 | `wizard.ant.query`                       | `Invoke-AntQuery`              | `{ model, promptHead, maxTokens, ts }`                                              |
 | `wizard.bashcompat.unsupported`          | `Invoke-BashCompat` (when input falls outside the supported subset) | `{ command, reason }` |
+| `wizard.loop.wake.<sid>`                 | `Send-WizardLoopWake` (or WizardErasmus `--wake` CLI) | `{ sessionId, at }` — wake a sleeping `idle_watch_loop` driver early. WE consumer at `ai_wrappers/idle_watch_loop.py:_interruptible_sleep`. |
+| `wizard.loop.tick.complete`              | WizardErasmus `idle_watch_loop` (rev-3, live) | `{ session_id, event_kind, duration_ms, nudge_count, menu_answer_count }` — published once per tick when the loop driver has a wizard pwsh pipe. Use to dashboard loop liveness without OCR. |
+| `wizard.loop.rate_limited`               | WizardErasmus `idle_watch_loop` (rev-3, live) | `{ session_id, parsed_delay_s, at }` — emitted before the chunked rate-limit sleep so external monitors can show "loop sleeping until X". |
+| `wizard.loop.rate_limit.cleared`         | WizardErasmus `idle_watch_loop` (rev-3, live) | `{ session_id, woken_externally, at }` — emitted after the post-sleep nudge fires; pairs with `wizard.loop.rate_limited` for the full transition. |
+
+### Send-WizardLoopWake (rev-3, live)
+
+| Cmdlet | What |
+| ------ | ---- |
+| `Send-WizardLoopWake -SessionId <sid> [-PipeName <name>]` | One-line wrapper around `Publish-WizardSignal -Topic wizard.loop.wake.<sid>`. Pairs with the WizardErasmus-side `python -m ai_wrappers.idle_watch_loop --wake <sid>` CLI — both publish the same topic. PowerShell users get a one-word command, Python users get the same effect from any shell. |
+
+```powershell
+# Wake the loop driving managed terminal session claude-24624-…
+Send-WizardLoopWake -SessionId claude-24624-1777343499545
+
+# Target a specific pwsh pipe (when the loop driver lives in a different shell):
+Send-WizardLoopWake -SessionId sess-123 -PipeName wizard-pwsh-19636
+```
+
+The driver records its own pipe name on the managed-terminal sidecar at startup (field `loop_driver_pwsh_pipe`); use that when waking from a different pwsh shell.
 
 ---
 
