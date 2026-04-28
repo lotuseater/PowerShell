@@ -1866,7 +1866,7 @@ namespace Microsoft.PowerShell
             }
         }
 
-        internal WizardControlSnapshot GetWizardControlSnapshot()
+        internal WizardControlSnapshot GetWizardControlSnapshot(bool extended = false)
         {
             string runspaceState = _runspaceRef?.Runspace?.RunspaceStateInfo.State.ToString() ?? string.Empty;
             string windowTitle = string.Empty;
@@ -1878,7 +1878,54 @@ namespace Microsoft.PowerShell
             {
             }
 
-            return new WizardControlSnapshot(_isRunningPromptLoop, ShouldEndSession, runspaceState, windowTitle);
+            if (!extended)
+            {
+                return new WizardControlSnapshot(_isRunningPromptLoop, ShouldEndSession, runspaceState, windowTitle);
+            }
+
+            // γ2: extended snapshot. Best-effort introspection of the running pipeline + history.
+            // All fail-safe: any throw collapses to null/zero; the caller still gets the rest.
+            string currentCommand = null;
+            string lastCommand = null;
+            int historyCount = 0;
+            try
+            {
+                Pipeline running = runningCmd;
+                if (running != null && running.PipelineStateInfo.State == PipelineState.Running)
+                {
+                    if (running.Commands != null && running.Commands.Count > 0)
+                    {
+                        currentCommand = running.Commands[0].CommandText;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                LocalRunspace local = _runspaceRef?.Runspace as LocalRunspace;
+                if (local != null && local.History != null)
+                {
+                    var entries = local.History.GetEntries(0, long.MaxValue, true);
+                    if (entries != null)
+                    {
+                        // History.GetEntries returns HistoryInfo[]; arrays use Length, not Count.
+                        historyCount = entries.Length;
+                        if (entries.Length > 0)
+                        {
+                            // GetEntries returns oldest→newest by default; the last entry is the most recent.
+                            lastCommand = entries[entries.Length - 1].CommandLine;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return new WizardControlSnapshot(_isRunningPromptLoop, ShouldEndSession, runspaceState, windowTitle, currentCommand, lastCommand, historyCount);
         }
 
         internal void WizardInterruptCurrentPipeline()

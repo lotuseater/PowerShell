@@ -117,11 +117,44 @@ Start-PSBuild -Configuration $Configuration
 }
 
 function Find-ReleaseLockers {
+    # Two ways a pwsh process can hold publish DLLs open:
+    #   1. Its executable IS the Release pwsh.exe (started from the build).
+    #   2. It was started from a different pwsh (e.g. installed PS 7) but
+    #      loaded one of our build's DLLs into its module list — common
+    #      when a wizard cmdlet imports our module by path.
+    # Both classes block MSB3027 publish copy. Find both.
     $relPwsh = Get-PublishExe -Configuration 'Release'
     if (-not (Test-Path -LiteralPath $relPwsh)) { return @() }
-    return @(Get-Process pwsh -ErrorAction SilentlyContinue | Where-Object {
-        try { $_.Path -ieq $relPwsh } catch { $false }
-    })
+    $publishDir = Split-Path -LiteralPath $relPwsh -Parent
+    $publishDirNorm = ($publishDir.TrimEnd('\') + '\').ToLowerInvariant()
+
+    $candidates = Get-Process pwsh -ErrorAction SilentlyContinue
+    $lockers = New-Object System.Collections.Generic.List[object]
+    foreach ($p in $candidates) {
+        $isMatch = $false
+        try {
+            if ($p.Path -ieq $relPwsh) { $isMatch = $true }
+        } catch { }
+        if (-not $isMatch) {
+            try {
+                foreach ($m in $p.Modules) {
+                    $mp = ($m.FileName ?? '').ToLowerInvariant()
+                    if ($mp.StartsWith($publishDirNorm)) {
+                        $isMatch = $true
+                        break
+                    }
+                }
+            } catch {
+                # Access denied on Modules is common for elevated processes;
+                # skip those — we can't see their modules so we can't safely
+                # claim they're locking us.
+            }
+        }
+        if ($isMatch) {
+            $null = $lockers.Add($p)
+        }
+    }
+    return @($lockers)
 }
 
 function Stop-ReleaseLockers {
@@ -162,7 +195,26 @@ if (-not $ReleaseOnly) {
 if (-not $DebugOnly) {
     Stop-ReleaseLockers -NoPrompt:$Force
     $debugPwsh = Get-PublishExe -Configuration 'Debug'
-    Invoke-WizardBuild -Configuration 'Release' -UsingPwshExe $debugPwsh
+    try {
+        Invoke-WizardBuild -Configuration 'Release' -UsingPwshExe $debugPwsh
+    }
+    catch {
+        # Common race: a new pwsh session spawned (loop tab, agent, /loop body)
+        # AFTER the Stop-ReleaseLockers pre-pass but BEFORE the publish copy.
+        # Detect MSB3027 / "is being used by another process" in the most
+        # recent log; if found, sweep again and retry once.
+        $latestLog = Get-ChildItem -LiteralPath $LogRoot -Filter 'Release-*.log' -File |
+                     Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $isLockRace = $false
+        if ($latestLog) {
+            $isLockRace = Select-String -LiteralPath $latestLog.FullName -Pattern 'MSB3027|is being used by another process' -Quiet
+        }
+        if (-not $isLockRace) { throw }
+        Write-Host '==> Release build hit a file-lock race; sweeping again and retrying once.' -ForegroundColor Yellow
+        Stop-ReleaseLockers -NoPrompt:$true
+        Start-Sleep -Seconds 3
+        Invoke-WizardBuild -Configuration 'Release' -UsingPwshExe $debugPwsh
+    }
 }
 
 # --- Verify rollout reached the deployed shim ---------------------------------

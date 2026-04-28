@@ -187,8 +187,12 @@ namespace Microsoft.PowerShell
                         return JsonSerializer.Serialize(Hello());
                     case "status":
                         return JsonSerializer.Serialize(Status());
+                    case "status.extended":
+                        return JsonSerializer.Serialize(StatusExtended());
                     case "read":
                         return JsonSerializer.Serialize(Read(GetInt(root, "maxLines", 120)));
+                    case "read.structured":
+                        return JsonSerializer.Serialize(ReadStructured(GetInt(root, "maxLines", 200)));
                     case "write":
                         return JsonSerializer.Serialize(Write(GetString(root, "text") ?? string.Empty, GetBool(root, "submit", false)));
                     case "interrupt":
@@ -258,6 +262,31 @@ namespace Microsoft.PowerShell
             };
         }
 
+        // γ2: same shape as Status() plus runspace-introspection fields. Lets DAB / agents
+        // know what's running in this tab right now without OCR or keystroke-driven
+        // diagnostics. Populated by ConsoleHost.GetWizardControlSnapshot(extended:true).
+        private object StatusExtended()
+        {
+            WizardControlSnapshot snapshot = _host.GetWizardControlSnapshot(extended: true);
+            return new
+            {
+                status = "ok",
+                protocol = ProtocolVersion,
+                pid = Environment.ProcessId,
+                pipe = _pipeName,
+                cwd = Environment.CurrentDirectory,
+                startedAt = _startedAt,
+                lastRequestAt = _lastRequestAt,
+                promptActive = snapshot.PromptActive,
+                shouldEndSession = snapshot.ShouldEndSession,
+                runspaceState = snapshot.RunspaceState,
+                windowTitle = snapshot.WindowTitle,
+                currentCommand = snapshot.CurrentCommand,
+                lastCommand = snapshot.LastCommand,
+                historyCount = snapshot.HistoryCount
+            };
+        }
+
         // SignalPublish / SignalSubscribe / SignalList / SignalClear and the SignalEvent struct
         // moved to WizardControlServer.Signals.cs partial in β8.
 
@@ -275,6 +304,83 @@ namespace Microsoft.PowerShell
                 method = "native_console",
                 text = result.Text,
                 lines = result.Lines,
+                width = result.Width,
+                height = result.Height,
+                window = result.Window
+            };
+        }
+
+        // Match `error CS1234:` / `Error: ...` / `Exception:` etc. without
+        // System.Text.RegularExpressions.Regex compiled at hot-path time —
+        // pre-compiled static regex avoids per-line allocation cost.
+        private static readonly System.Text.RegularExpressions.Regex ErrorLineRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"^(?:\s*)(?:Error:|Exception:|FATAL:|FATAL ERROR:|error\s+\w+:|\w+\.?Exception:)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        // Recognises the PowerShell prompt (`PS C:\path> `), the legacy
+        // `>` continuation prompt, and Claude Code's `❯ ` TUI glyph.
+        private static readonly System.Text.RegularExpressions.Regex PromptLineRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"^\s*(?:PS\s+[^>\n]+>\s*$|>\s*$|❯\s*.*$)",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static string ClassifyLine(string line)
+        {
+            if (string.IsNullOrEmpty(line))
+            {
+                return "output";
+            }
+
+            // Error patterns checked first — `Exception:` lines could also
+            // visually look like prompts if they contain `>` later, so
+            // priority matters.
+            if (ErrorLineRegex.IsMatch(line))
+            {
+                return "error";
+            }
+
+            if (PromptLineRegex.IsMatch(line))
+            {
+                return "prompt";
+            }
+
+            return "output";
+        }
+
+        // γ3 (2026-04-29): structured read of the console buffer.
+        // Returns one entry per line with {lineNum, type, text}. Types are
+        // "prompt" (PS prompt glyph or Claude Code ❯), "error" (matches a
+        // known error-line shape), or "output" (default). Designed to drive
+        // smarter loop classifier behaviour without OCR — see
+        // `docs/wizard/Not_Finished.md` for the original spec.
+        private static object ReadStructured(int maxLines)
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return new { status = "error", error = "unsupported_platform" };
+            }
+
+            ConsoleReadResult result = WindowsConsole.Read(maxLines);
+            string[] sourceLines = result.Lines ?? System.Array.Empty<string>();
+            var typed = new object[sourceLines.Length];
+            for (int i = 0; i < sourceLines.Length; i++)
+            {
+                string text = sourceLines[i] ?? string.Empty;
+                typed[i] = new
+                {
+                    lineNum = i + 1,
+                    type = ClassifyLine(text),
+                    text
+                };
+            }
+
+            return new
+            {
+                status = "ok",
+                method = "native_console",
+                lines = typed,
                 width = result.Width,
                 height = result.Height,
                 window = result.Window
@@ -514,12 +620,22 @@ namespace Microsoft.PowerShell
 
     internal readonly struct WizardControlSnapshot
     {
-        internal WizardControlSnapshot(bool promptActive, bool shouldEndSession, string runspaceState, string windowTitle)
+        internal WizardControlSnapshot(
+            bool promptActive,
+            bool shouldEndSession,
+            string runspaceState,
+            string windowTitle,
+            string currentCommand = null,
+            string lastCommand = null,
+            int historyCount = 0)
         {
             PromptActive = promptActive;
             ShouldEndSession = shouldEndSession;
             RunspaceState = runspaceState;
             WindowTitle = windowTitle;
+            CurrentCommand = currentCommand;
+            LastCommand = lastCommand;
+            HistoryCount = historyCount;
         }
 
         internal bool PromptActive { get; }
@@ -529,5 +645,14 @@ namespace Microsoft.PowerShell
         internal string RunspaceState { get; }
 
         internal string WindowTitle { get; }
+
+        // Phase γ2: programmatic command introspection so DAB doesn't have to OCR
+        // the screen to know what's running in a tab. Populated on demand in
+        // ConsoleHost.GetWizardControlSnapshot when the caller asks for the extended view.
+        internal string CurrentCommand { get; }
+
+        internal string LastCommand { get; }
+
+        internal int HistoryCount { get; }
     }
 }
