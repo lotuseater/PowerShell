@@ -20,15 +20,33 @@ function Get-WizardLog {
         Get-WizardLog -LogPath $r.LogPath -Range "lines:5000-5050"
         Get-WizardLog -LogPath $r.LogPath -Range "grep:error\b"
     #>
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'ByPath')]
     [OutputType([string])]
     param(
-        [Parameter(Mandatory, Position = 0)]
+        [Parameter(Mandatory, Position = 0, ParameterSetName = 'ByPath')]
         [string] $LogPath,
+
+        # δ1: when set, auto-locate the most recent log under
+        # %LOCALAPPDATA%\WizardPowerShell\logs\. Saves the agent from having to
+        # remember the LogPath returned by the previous Invoke-Bounded.
+        [Parameter(Mandatory, ParameterSetName = 'Latest')]
+        [switch] $Latest,
 
         [Parameter(Position = 1)]
         [string] $Range = 'tail:200'
     )
+
+    if ($Latest) {
+        $logDir = Join-Path -Path ([Environment]::GetFolderPath('LocalApplicationData')) -ChildPath 'WizardPowerShell\logs'
+        $newest = Get-ChildItem -LiteralPath $logDir -Filter '*.log' -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+        if (-not $newest) {
+            throw "Get-WizardLog -Latest: no logs in $logDir."
+        }
+        $LogPath = $newest.FullName
+        Write-Verbose "Get-WizardLog -Latest resolved to $LogPath"
+    }
 
     if (-not (Test-Path -LiteralPath $LogPath)) {
         throw "Wizard log not found: $LogPath"
