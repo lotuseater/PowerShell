@@ -28,7 +28,10 @@ function Find-Code {
         [string] $Path = (Get-Location).ProviderPath,
 
         [int] $Context = 2,
-        [int] $MaxCount = 120,
+        # Default lowered from 120 → 40 (2026-04-28). 80 % of agent searches want the first
+        # handful of hits; rare callers bump explicitly. Each match averages ~100 chars
+        # incl. context, so the default emits ≤ 4 KB / ~1 k tokens by itself.
+        [int] $MaxCount = 40,
         [string[]] $Include,
         [switch] $FilesOnly,
         [switch] $Json,

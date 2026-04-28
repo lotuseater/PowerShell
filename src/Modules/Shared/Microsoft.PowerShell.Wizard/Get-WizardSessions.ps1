@@ -39,7 +39,13 @@ function Get-WizardSessions {
     [OutputType('WizardSessionEntry')]
     param(
         [switch] $IncludeStale,
-        [string] $SessionRoot
+        [string] $SessionRoot,
+        # Compact-default for agent contexts (2026-04-28). On a busy box the wizard fork
+        # easily produces 30-50 live sessions; emitting the full list on every call wastes
+        # ~3 k tokens. By default we emit the most recently-started 10 sessions; pass -All
+        # to override.
+        [int] $Top = 10,
+        [switch] $All
     )
 
     if (-not $SessionRoot) {
@@ -49,8 +55,8 @@ function Get-WizardSessions {
         return
     }
 
-    Get-ChildItem -LiteralPath $SessionRoot -Filter '*.json' -File -ErrorAction SilentlyContinue | ForEach-Object {
-        $sessionPath = $_.FullName
+    $records = foreach ($file in Get-ChildItem -LiteralPath $SessionRoot -Filter '*.json' -File -ErrorAction SilentlyContinue) {
+        $sessionPath = $file.FullName
         try {
             # -ErrorAction Stop on Get-Content too — without it the cmdlet's
             # non-terminating "file not found" (TOCTOU race when a wizard pwsh
@@ -58,31 +64,36 @@ function Get-WizardSessions {
             $raw = Get-Content -LiteralPath $sessionPath -Raw -Encoding utf8 -ErrorAction Stop
             $payload = $raw | ConvertFrom-Json -ErrorAction Stop
         } catch {
-            return
+            continue
         }
 
         $sessionPid = [int]$payload.pid
         $isAlive = $false
         try {
-            $proc = Get-Process -Id $sessionPid -ErrorAction Stop
+            $null = Get-Process -Id $sessionPid -ErrorAction Stop
             $isAlive = $true
-        } catch {
-            $isAlive = $false
-        }
-        if (-not $isAlive -and -not $IncludeStale) { return }
+        } catch { }
+        if (-not $isAlive -and -not $IncludeStale) { continue }
 
         [pscustomobject]@{
-            PSTypeName    = 'WizardSessionEntry'
-            Pid           = $sessionPid
-            PipeName      = [string]$payload.pipe
-            Cwd           = [string]$payload.cwd
-            Executable    = [string]$payload.executable
-            ProcessName   = [string]$payload.processName
-            Started       = $payload.startedAt
-            UpdatedAt     = $payload.updatedAt
+            PSTypeName      = 'WizardSessionEntry'
+            Pid             = $sessionPid
+            PipeName        = [string]$payload.pipe
+            Cwd             = [string]$payload.cwd
+            Executable      = [string]$payload.executable
+            ProcessName     = [string]$payload.processName
+            Started         = $payload.startedAt
+            UpdatedAt       = $payload.updatedAt
             ProtocolVersion = $payload.protocol
-            IsAlive       = $isAlive
-            SessionFile   = $sessionPath
+            IsAlive         = $isAlive
+            SessionFile     = $sessionPath
         }
     }
+
+    if ($null -eq $records) { return }
+    # Sort newest-first (most-recently started → most relevant for diagnostics).
+    $sorted = @($records) | Sort-Object -Property Started -Descending
+    if ($All) { return $sorted }
+    if ($Top -gt 0 -and $sorted.Count -gt $Top) { return $sorted | Select-Object -First $Top }
+    return $sorted
 }
