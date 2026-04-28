@@ -79,3 +79,35 @@ if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
     $banner = "Wizard PowerShell — $wizardConfig build $wizardDate (WIZARD_PWSH_CONTROL=$($env:WIZARD_PWSH_CONTROL))"
     try { Write-Host $banner -ForegroundColor DarkCyan } catch { Write-Host $banner }
 }
+
+# First-moves embedding daemon auto-warm. Mirror of the SessionStart hook in
+# Wizard_Erasmus's Claude Code config so that Codex sessions (and any wizard
+# pwsh shell) get a warm daemon too. Skip when WIZARD_FIRST_MOVES_EMBED=0 or
+# WIZARD_FIRST_MOVES=0. Fire-and-forget — model load is 5-30s but happens in
+# a fully detached child while the user reads the banner.
+$wizFirstMoves      = ($env:WIZARD_FIRST_MOVES + '').ToLower()
+$wizFirstMovesEmbed = ($env:WIZARD_FIRST_MOVES_EMBED + '').ToLower()
+if ($wizFirstMoves -notin @('0','false','no','off') -and
+    $wizFirstMovesEmbed -notin @('0','false','no','off')) {
+    try {
+        $wizardRepo = Join-Path $env:USERPROFILE 'Documents\GitHub\Wizard_Erasmus'
+        $client     = Join-Path $wizardRepo 'src\mcp\embed_client.py'
+        if (Test-Path -LiteralPath $client) {
+            $py = if (Get-Command 'py' -ErrorAction SilentlyContinue) { @('py','-3.14') } else { @('python') }
+            $pingResult = & $py[0] $py[1..($py.Length - 1)] $client ping 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $pingResult) {
+                # Daemon isn't running — detach-spawn it without blocking.
+                $service = Join-Path $wizardRepo 'src\mcp\embed_service.py'
+                if (Test-Path -LiteralPath $service) {
+                    $proc = Start-Process -FilePath $py[0] `
+                        -ArgumentList ($py[1..($py.Length - 1)] + @($service)) `
+                        -WindowStyle Hidden -PassThru `
+                        -ErrorAction SilentlyContinue
+                    # Don't wait on it — the daemon writes its discovery file
+                    # when the model finishes loading, and first_moves_hook
+                    # will pick it up on the next user turn.
+                }
+            }
+        }
+    } catch { }
+}
