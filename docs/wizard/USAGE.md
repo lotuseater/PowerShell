@@ -152,6 +152,44 @@ Useful when a hook or skill needs to call Claude programmatically — e.g. to su
 | ------ | ---- |
 | `Send-WizardLoopWake -SessionId <sid> [-PipeName <name>]` | One-line wrapper around `Publish-WizardSignal -Topic wizard.loop.wake.<sid>`. Pairs with the WizardErasmus-side `python -m ai_wrappers.idle_watch_loop --wake <sid>` CLI — both publish the same topic. PowerShell users get a one-word command, Python users get the same effect from any shell. |
 
+### read.structured verb (γ3, live)
+
+Control-pipe verb that returns the console buffer as typed lines
+instead of flat text. Drives smarter loop classifier behaviour
+without OCR.
+
+| Verb | Request | Response |
+| ---- | ------- | -------- |
+| `read.structured` | `{ command: 'read.structured', maxLines: 200 }` | `{ status, method:'native_console', lines:[{lineNum, type, text}], width, height, window }` |
+
+`type` is one of:
+- `prompt` — line matches the host's prompt glyph (`PS C:\repo>`,
+  trailing `>`, or Claude Code's `❯`).
+- `error` — line matches a known error-line shape (`Error:`,
+  `Exception:`, `error CS1234:`, `FATAL:`, ...).
+- `output` — default classification.
+
+Call from PowerShell:
+
+```powershell
+$h = Connect-WizardPwshSession -Pid 12345
+$lines = $h.ReadStructured(120).lines
+$lines | Where-Object type -eq 'error' | ForEach-Object { Write-Warning $_.text }
+```
+
+Call from Python:
+
+```python
+from wizard_pwsh_client import WizardPwshClient
+with WizardPwshClient(pid=12345) as c:
+    structured = c.read_structured(120)
+    for entry in structured.get("lines", []):
+        if entry["type"] == "error":
+            handle(entry["text"])
+```
+
+Older servers without the verb return `{ status: 'error', error: 'unknown_command' }`.
+
 ### Start-WizardManagedTerminal (rev-4, live)
 
 | Cmdlet | What |

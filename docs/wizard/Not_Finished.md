@@ -34,47 +34,26 @@ Updated 2026-04-29.
   (default = on; set to `0` for kill-switch). Falls back silently to
   the legacy in-process spawn on cmdlet failure. Pester test +
   WE-side pytest both green.
+- ✅ **`read.structured` control-pipe verb** (audit §1.3, γ3) —
+  returns the console buffer as `[{lineNum, type:'prompt'|'output'|
+  'error', text}]` so callers can drive smarter classifier behaviour
+  without OCR. C# implementation in
+  `src/Microsoft.PowerShell.ConsoleHost/host/msh/WizardControlServer.cs`,
+  Python client method
+  `WizardPwshClient.read_structured(max_lines=200)`, PS-side handle
+  method `Connect-WizardPwshSession -Pid X` → `.ReadStructured()`.
+  Pester test exercises happy-path + backwards-compat with plain
+  `read`.
+- ✅ **Build-WizardBoth.ps1 hardening** — `Find-ReleaseLockers` now
+  also matches pwsh processes that loaded any DLL from the Release
+  publish dir (not just those whose `.Path` IS the Release pwsh.exe).
+  Release build retries once on MSB3027 / "is being used by another
+  process" race after a second sweep — covers the case where a new
+  pwsh session spawns between the pre-publish kill and the file copy.
 
 ## Still deferred
 
-### `read.structured` control-pipe verb (audit §1.3)
-
-Medium C# effort in `WizardControlServer.cs`. Returns the console
-buffer as typed lines instead of flat text. Defer until a concrete
-consumer requires structured output — `_build_pwsh_freshness_probe`
-+ raw `read` cover the immediate "did anything change" need.
-
-**Verb spec** (so the implementer doesn't have to re-derive it):
-
-Request:
-```json
-{ "command": "read.structured", "maxLines": 200 }
-```
-
-Response:
-```json
-{
-  "status": "ok",
-  "lines": [
-    { "lineNum": 1, "type": "prompt", "text": "PS C:\\repo>" },
-    { "lineNum": 2, "type": "output", "text": "Building..." },
-    { "lineNum": 3, "type": "error",  "text": "error CS1234..." }
-  ]
-}
-```
-
-Type tags:
-- `prompt` — line ends with `> ` and matches the host's prompt
-  function output (or starts with `❯ ` for Claude Code's TUI prompt
-  glyph).
-- `output` — default classification.
-- `error` — written to the stderr stream OR matches a known
-  error-line shape (`error \w+:`, `Error:`, `Exception:`).
-
-Drives smarter `IdleWatchLoop` state-classifier behaviour
-(distinguishes "agent producing output" from "agent showing the same
-prompt as before") without OCR. Ship when a `Start-PSBuild`-capable
-session is available.
+(none in this list — pull in audit follow-ups as needed)
 
 ## Won't fix per audit §3
 

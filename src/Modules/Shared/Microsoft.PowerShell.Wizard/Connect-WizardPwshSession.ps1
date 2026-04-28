@@ -133,6 +133,11 @@ function Connect-WizardPwshSession {
         $this.Send(@{ command = 'read'; maxLines = $MaxLines })
     } -Force
 
+    Add-Member -InputObject $handle -MemberType ScriptMethod -Name ReadStructured -Value {
+        param([int] $MaxLines = 200)
+        $this.Send(@{ command = 'read.structured'; maxLines = $MaxLines })
+    } -Force
+
     Add-Member -InputObject $handle -MemberType ScriptMethod -Name Write -Value {
         param([string] $Text, [bool] $Submit = $true)
         $this.Send(@{ command = 'write'; text = $Text; submit = $Submit })
