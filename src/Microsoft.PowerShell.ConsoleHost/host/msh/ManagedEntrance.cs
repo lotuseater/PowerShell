@@ -86,10 +86,16 @@ namespace Microsoft.PowerShell
             int exitCode = 0;
             try
             {
+                string commitId = PSVersionInfo.GitCommitId;
+                string wizardSuffix = WizardBuildIdentity.Suffix;
+                if (!string.IsNullOrEmpty(wizardSuffix))
+                {
+                    commitId = commitId + " " + wizardSuffix;
+                }
                 string banner = string.Format(
                     CultureInfo.InvariantCulture,
                     ManagedEntranceStrings.ShellBannerPowerShell,
-                    PSVersionInfo.GitCommitId);
+                    commitId);
 
                 ConsoleHost.DefaultInitialSessionState = InitialSessionState.CreateDefault2();
 
