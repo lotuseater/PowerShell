@@ -1,4 +1,4 @@
-# Loop revision-3 — out-of-scope follow-ups
+# Loop revision-3/4 — out-of-scope follow-ups
 
 This file tracks the deferred items from the WizardErasmus loop
 revision-3 cleanup (`docs/wizard/AUDIT_DAB_LOOP_TEAMAPP_2026-04-28.md`).
@@ -24,29 +24,73 @@ Updated 2026-04-29.
   through the parent wizard pwsh pipe. Falls back to plain sleep when
   the pipe is unreachable. External callers can now wake / hold off
   the shutdown by publishing to the topic.
+- ✅ **Start-WizardManagedTerminal cmdlet** (audit §4.2) —
+  one-cmdlet replacement for WizardErasmus's hand-rolled base64-
+  encoded `pwsh -EncodedCommand` spawn dance. Spawns via `wt.exe -w
+  <window> new-tab` by default, `Start-Process pwsh` with
+  `-NewWindow`. Returns `WizardManagedTerminalResult` with `Pid`,
+  `Title`, `SessionId`, `Channel`, `Provider`, `Cwd`, `WtWindow`.
+  WizardErasmus consumer gates on `WIZARD_USE_MANAGED_TERMINAL_CMDLET`
+  (default = on; set to `0` for kill-switch). Falls back silently to
+  the legacy in-process spawn on cmdlet failure. Pester test +
+  WE-side pytest both green.
 
 ## Still deferred
 
-- **Start-WizardManagedTerminal cmdlet** (audit §4.2). High effort,
-  widest blast radius — would replace WizardErasmus's hand-rolled
-  base64-encoded `pwsh -EncodedCommand` spawn dance with one cmdlet.
-  Defer until at least three other rev-3 wirings have soaked in
-  production for ≥1 week with no regressions.
-- **`read.structured` control-pipe verb** (audit §1.3). Medium C#
-  effort. Returns the console buffer as `[{lineNum, type, text}]`
-  instead of flat text. Loop's freshness probe + raw `read` cover the
-  immediate need; defer until a concrete consumer requires structured
-  output.
-- **Migrating the team app's file-based JSON IPC to the signal bus**
-  (audit §3 explicitly says the team app is fine as-is). Do not
-  attempt — the file-based contract is the documented public API.
+### `read.structured` control-pipe verb (audit §1.3)
 
-## Removed from the deferred list
+Medium C# effort in `WizardControlServer.cs`. Returns the console
+buffer as typed lines instead of flat text. Defer until a concrete
+consumer requires structured output — `_build_pwsh_freshness_probe`
++ raw `read` cover the immediate "did anything change" need.
 
-- ~~`Connect-WizardPwshSession`~~ — shipped.
-- ~~DAB `send_keyboard_shortcut_by_name`~~ — shipped (called
-  `dab_send_keyboard_shortcut` on the Python side).
-- ~~Hook host adoption for `embed_service.py`~~ — different scope; the
-  signal-bus wakeable watchdog landed instead, which addresses the
-  same "kill the bare sleep" intent without re-architecting the
-  service to host inside a PowerShell hook host.
+**Verb spec** (so the implementer doesn't have to re-derive it):
+
+Request:
+```json
+{ "command": "read.structured", "maxLines": 200 }
+```
+
+Response:
+```json
+{
+  "status": "ok",
+  "lines": [
+    { "lineNum": 1, "type": "prompt", "text": "PS C:\\repo>" },
+    { "lineNum": 2, "type": "output", "text": "Building..." },
+    { "lineNum": 3, "type": "error",  "text": "error CS1234..." }
+  ]
+}
+```
+
+Type tags:
+- `prompt` — line ends with `> ` and matches the host's prompt
+  function output (or starts with `❯ ` for Claude Code's TUI prompt
+  glyph).
+- `output` — default classification.
+- `error` — written to the stderr stream OR matches a known
+  error-line shape (`error \w+:`, `Error:`, `Exception:`).
+
+Drives smarter `IdleWatchLoop` state-classifier behaviour
+(distinguishes "agent producing output" from "agent showing the same
+prompt as before") without OCR. Ship when a `Start-PSBuild`-capable
+session is available.
+
+## Won't fix per audit §3
+
+### Migrating the team app's file-based JSON IPC to the signal bus
+
+Audit `AUDIT_DAB_LOOP_TEAMAPP_2026-04-28.md` §3 explicitly says:
+> The team app itself is "clean, file-based, doesn't need
+> wizard-fork changes." Verdict on team app proper: clean,
+> file-based, doesn't need wizard-fork changes.
+
+The file-based JSON contract (`{prefix}_cmd.json`, `_resp.jsonl`,
+`_events.jsonl`) is the documented public API of the team app and
+the source of truth for cross-language interop. Migrating it to the
+signal bus would either:
+1. Break every existing team-app consumer (status: not acceptable),
+2. Or duplicate the file API and the signal bus (status: doubles
+   maintenance with no user benefit).
+
+Do not attempt.
