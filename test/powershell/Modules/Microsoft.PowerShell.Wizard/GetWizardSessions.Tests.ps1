@@ -108,14 +108,15 @@ Describe "Get-WizardSessions" -Tags "Feature" {
         $root = Join-Path $TempRoot "cleanup-$([Guid]::NewGuid().ToString('N'))"
         New-Item -ItemType Directory -Force -Path $root | Out-Null
         try {
+            $currentProcess = Get-Process -Id $PID
             $live = [pscustomobject]@{
                 pid         = $PID
                 pipe        = "wizard-pwsh-live-$PID"
                 protocol    = 1
                 cwd         = (Get-Location).ProviderPath
-                executable  = (Get-Process -Id $PID).Path
-                processName = (Get-Process -Id $PID).ProcessName
-                startedAt   = (Get-Date).ToUniversalTime().ToString('o')
+                executable  = $currentProcess.Path
+                processName = $currentProcess.ProcessName
+                startedAt   = $currentProcess.StartTime.ToUniversalTime().ToString('o')
                 updatedAt   = (Get-Date).ToUniversalTime().ToString('o')
             }
             $stale = $live.PSObject.Copy()
@@ -130,6 +131,33 @@ Describe "Get-WizardSessions" -Tags "Feature" {
             $result.KeptLive | Should -Be 1
             Test-Path -LiteralPath (Join-Path $root 'live.json') | Should -BeTrue
             Test-Path -LiteralPath (Join-Path $root 'stale.json') | Should -BeFalse
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "Clear-WizardStaleSessions removes records when a PID was reused" {
+        $root = Join-Path $TempRoot "cleanup-reused-$([Guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Force -Path $root | Out-Null
+        try {
+            $reused = [pscustomobject]@{
+                pid         = $PID
+                pipe        = "wizard-pwsh-reused-$PID"
+                protocol    = 1
+                cwd         = (Get-Location).ProviderPath
+                executable  = (Get-Process -Id $PID).Path
+                processName = (Get-Process -Id $PID).ProcessName
+                startedAt   = (Get-Date).AddDays(-7).ToUniversalTime().ToString('o')
+                updatedAt   = (Get-Date).ToUniversalTime().ToString('o')
+            }
+            $path = Join-Path $root 'reused.json'
+            $reused | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $path -Encoding utf8
+
+            $result = Clear-WizardStaleSessions -SessionRoot $root
+            $result.Scanned | Should -Be 1
+            $result.Removed | Should -Be 1
+            $result.KeptLive | Should -Be 0
+            Test-Path -LiteralPath $path | Should -BeFalse
         } finally {
             Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
         }
