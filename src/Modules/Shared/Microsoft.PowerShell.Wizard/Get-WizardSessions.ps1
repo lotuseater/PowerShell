@@ -55,7 +55,17 @@ function Get-WizardSessions {
         return
     }
 
-    $records = foreach ($file in Get-ChildItem -LiteralPath $SessionRoot -Filter '*.json' -File -ErrorAction SilentlyContinue) {
+    $livePids = @{}
+    try {
+        foreach ($process in Get-Process -ErrorAction SilentlyContinue) {
+            $livePids[[int]$process.Id] = $true
+        }
+    } catch { }
+
+    $files = @(Get-ChildItem -LiteralPath $SessionRoot -Filter '*.json' -File -ErrorAction SilentlyContinue |
+        Sort-Object -Property LastWriteTimeUtc -Descending)
+    $records = [System.Collections.Generic.List[object]]::new()
+    foreach ($file in $files) {
         $sessionPath = $file.FullName
         try {
             # -ErrorAction Stop on Get-Content too — without it the cmdlet's
@@ -68,14 +78,10 @@ function Get-WizardSessions {
         }
 
         $sessionPid = [int]$payload.pid
-        $isAlive = $false
-        try {
-            $null = Get-Process -Id $sessionPid -ErrorAction Stop
-            $isAlive = $true
-        } catch { }
+        $isAlive = [bool]$livePids[$sessionPid]
         if (-not $isAlive -and -not $IncludeStale) { continue }
 
-        [pscustomobject]@{
+        $entry = [pscustomobject]@{
             PSTypeName      = 'WizardSessionEntry'
             Pid             = $sessionPid
             PipeName        = [string]$payload.pipe
@@ -88,9 +94,13 @@ function Get-WizardSessions {
             IsAlive         = $isAlive
             SessionFile     = $sessionPath
         }
+        $records.Add($entry)
+        if (-not $All -and -not $IncludeStale -and $Top -gt 0 -and $records.Count -ge $Top) {
+            break
+        }
     }
 
-    if ($null -eq $records) { return }
+    if ($records.Count -eq 0) { return }
     # Sort newest-first (most-recently started → most relevant for diagnostics).
     $sorted = @($records) | Sort-Object -Property Started -Descending
     if ($All) { return $sorted }

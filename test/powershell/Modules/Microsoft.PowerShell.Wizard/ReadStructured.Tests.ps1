@@ -4,6 +4,7 @@
 Describe "read.structured verb (γ3)" -Tags "Feature" {
     BeforeAll {
         $script:Pwsh = Join-Path -Path $PSHOME -ChildPath 'pwsh'
+        $script:WizardControlAvailable = Test-Path -LiteralPath (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Wizard\Microsoft.PowerShell.Wizard.psd1')
 
         function Start-WizardPwsh {
             param([string] $PipeName)
@@ -39,9 +40,23 @@ Describe "read.structured verb (γ3)" -Tags "Feature" {
                 return $r.ReadLine() | ConvertFrom-Json
             } finally { $pipe.Dispose() }
         }
+
+        function Skip-IfNoConsoleBuffer {
+            param($Response)
+            if ($Response.status -eq 'error' -and
+                (($Response.message + '') -match 'GetConsoleScreenBufferInfo failed' -or ($Response.error + '') -eq 'IOException')) {
+                Set-ItResult -Skipped -Because 'child pwsh was launched with redirected stdio and has no console buffer'
+                return $true
+            }
+            return $false
+        }
     }
 
     It "returns lines as typed entries with lineNum / type / text" {
+        if (-not $script:WizardControlAvailable) {
+            Set-ItResult -Skipped -Because 'requires the wizard PowerShell host build'
+            return
+        }
         $pipe = "wizard-pwsh-test-readstruct-$([Guid]::NewGuid().ToString('N'))"
         $proc = Start-WizardPwsh -PipeName $pipe
         try {
@@ -49,6 +64,7 @@ Describe "read.structured verb (γ3)" -Tags "Feature" {
             Start-Sleep -Milliseconds 800
 
             $r = Send-WizardRequest -PipeName $pipe -Payload @{ command = 'read.structured'; maxLines = 50 }
+            if (Skip-IfNoConsoleBuffer $r) { return }
             $r.status | Should -BeExactly 'ok'
             $r.method | Should -BeExactly 'native_console'
             $r.lines | Should -Not -BeNullOrEmpty
@@ -58,21 +74,30 @@ Describe "read.structured verb (γ3)" -Tags "Feature" {
             foreach ($entry in $r.lines) {
                 $entry.lineNum | Should -BeGreaterThan 0
                 $entry.type | Should -BeIn @('prompt', 'output', 'error')
+                $entry.semantic | Should -BeIn @('process_exited', 'resume_picker', 'trust_prompt', 'permission_prompt', 'plan_mode', 'codex_ready', 'powershell_prompt', 'error', 'output')
                 # text may be the empty string for blank console rows; just
                 # assert the property exists.
                 $entry.PSObject.Properties.Name | Should -Contain 'text'
+                $entry.PSObject.Properties.Name | Should -Contain 'semantic'
             }
+            $r.PSObject.Properties.Name | Should -Contain 'semanticState'
+            $r.semanticState | Should -BeIn @('process_exited', 'resume_picker', 'trust_prompt', 'permission_prompt', 'plan_mode', 'codex_ready', 'powershell_prompt', 'error', 'output')
         } finally {
             Stop-WizardPwsh -Process $proc
         }
     }
 
     It "classifies the trailing PowerShell prompt line as 'prompt'" {
+        if (-not $script:WizardControlAvailable) {
+            Set-ItResult -Skipped -Because 'requires the wizard PowerShell host build'
+            return
+        }
         $pipe = "wizard-pwsh-test-readstruct-prompt-$([Guid]::NewGuid().ToString('N'))"
         $proc = Start-WizardPwsh -PipeName $pipe
         try {
             Start-Sleep -Milliseconds 800
             $r = Send-WizardRequest -PipeName $pipe -Payload @{ command = 'read.structured'; maxLines = 200 }
+            if (Skip-IfNoConsoleBuffer $r) { return }
             $r.status | Should -BeExactly 'ok'
             # The active PS prompt should appear as a 'prompt' entry somewhere
             # near the end of the buffer. We don't assert exact position
@@ -85,11 +110,16 @@ Describe "read.structured verb (γ3)" -Tags "Feature" {
     }
 
     It "plain read verb still works (backwards compatibility)" {
+        if (-not $script:WizardControlAvailable) {
+            Set-ItResult -Skipped -Because 'requires the wizard PowerShell host build'
+            return
+        }
         $pipe = "wizard-pwsh-test-readstruct-compat-$([Guid]::NewGuid().ToString('N'))"
         $proc = Start-WizardPwsh -PipeName $pipe
         try {
             Start-Sleep -Milliseconds 800
             $r = Send-WizardRequest -PipeName $pipe -Payload @{ command = 'read'; maxLines = 50 }
+            if (Skip-IfNoConsoleBuffer $r) { return }
             $r.status | Should -BeExactly 'ok'
             $r.PSObject.Properties.Name | Should -Contain 'text'
             $r.PSObject.Properties.Name | Should -Contain 'lines'

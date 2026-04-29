@@ -26,6 +26,8 @@ function Get-RepoProfile {
     [pscustomobject]@{
         PSTypeName     = 'WizardRepoProfile'
         Root           = $root
+        Name           = Split-Path -Leaf $root
+        IsWizardErasmus = ((Split-Path -Leaf $root) -eq 'Wizard_Erasmus')
         HasSolution    = [bool](Get-ChildItem -LiteralPath $root -Filter '*.sln' -File -ErrorAction SilentlyContinue | Select-Object -First 1)
         HasBuildPsm1   = Test-Path -LiteralPath (Join-Path $root 'build.psm1')
         HasPackageJson = Test-Path -LiteralPath (Join-Path $root 'package.json')

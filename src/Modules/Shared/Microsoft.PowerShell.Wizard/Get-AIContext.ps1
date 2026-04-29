@@ -26,10 +26,10 @@ function Get-AIContext {
         [int] $Radius = 40
     )
 
-    $resolved = (Resolve-Path -LiteralPath $File).ProviderPath
-    if (-not (Test-Path -LiteralPath $resolved)) {
+    if (-not (Test-Path -LiteralPath $File)) {
         throw "Get-AIContext: file not found: $File"
     }
+    $resolved = (Resolve-Path -LiteralPath $File -ErrorAction Stop).ProviderPath
 
     $startWanted = [Math]::Max(1, $StartLine - $Radius)
     $endWanted = $StartLine + $Radius

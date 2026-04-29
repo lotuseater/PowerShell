@@ -3,7 +3,9 @@
 
 Describe "Find-Code, Get-AIContext, Find-Repos" -Tags "Feature" {
     BeforeAll {
-        Import-Module (Join-Path $PSHOME "Modules/Microsoft.PowerShell.Wizard/Microsoft.PowerShell.Wizard.psd1") -Force
+        $modulePath = Join-Path $PSScriptRoot '..' '..' '..' '..' 'src' 'Modules' 'Shared' 'Microsoft.PowerShell.Wizard' 'Microsoft.PowerShell.Wizard.psd1'
+        $modulePath = Resolve-Path $modulePath
+        Import-Module $modulePath -Force
 
         $script:TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("wizard-aisearch-tests-$([Guid]::NewGuid().ToString('N'))")
         New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
@@ -57,6 +59,19 @@ def foo():
         }
     }
 
+    It "Find-Code -Compact respects the global MaxCount cap" -Skip:(-not (Get-Command rg -ErrorAction SilentlyContinue)) {
+        $hits = @(Find-Code -Pattern 'ZAP-PATTERN-X' -Path $TempRoot -Compact -MaxCount 1)
+        $hits.Count | Should -BeLessOrEqual 1
+    }
+
+    It "Find-Code ignores data directories by default" -Skip:(-not (Get-Command rg -ErrorAction SilentlyContinue)) {
+        $dataDir = Join-Path $TempRoot 'repoA/data'
+        New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+        Set-Content -LiteralPath (Join-Path $dataDir 'only-data.txt') -Value 'ONLY-DATA-PATTERN'
+        $hits = @(Find-Code -Pattern 'ONLY-DATA-PATTERN' -Path $TempRoot -Compact)
+        $hits.Count | Should -Be 0
+    }
+
     It "Find-Code throws when rg is missing" -Skip:([bool](Get-Command rg -ErrorAction SilentlyContinue)) {
         { Find-Code -Pattern 'TODO' } | Should -Throw '*ripgrep*'
     }
@@ -89,7 +104,9 @@ def foo():
 
 Describe "Get-RepoProfile, Update-RepoDigest, Measure-RepoSearch" -Tags "Feature" {
     BeforeAll {
-        Import-Module (Join-Path $PSHOME "Modules/Microsoft.PowerShell.Wizard/Microsoft.PowerShell.Wizard.psd1") -Force
+        $modulePath = Join-Path $PSScriptRoot '..' '..' '..' '..' 'src' 'Modules' 'Shared' 'Microsoft.PowerShell.Wizard' 'Microsoft.PowerShell.Wizard.psd1'
+        $modulePath = Resolve-Path $modulePath
+        Import-Module $modulePath -Force
 
         $script:Repo = Join-Path ([System.IO.Path]::GetTempPath()) ("wizard-repoprofile-$([Guid]::NewGuid().ToString('N'))")
         New-Item -ItemType Directory -Force -Path $Repo | Out-Null

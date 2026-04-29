@@ -329,11 +329,46 @@ namespace Microsoft.PowerShell
                 | System.Text.RegularExpressions.RegexOptions.Compiled);
 
         // Recognises the PowerShell prompt (`PS C:\path> `), the legacy
-        // `>` continuation prompt, and Claude Code's `❯ ` TUI glyph.
+        // `>` continuation prompt, and Claude/Codex TUI prompt glyphs.
         private static readonly System.Text.RegularExpressions.Regex PromptLineRegex =
             new System.Text.RegularExpressions.Regex(
-                @"^\s*(?:PS\s+[^>\n]+>\s*$|>\s*$|❯\s*.*$)",
+                @"^\s*(?:PS\s+[^>\n]+>\s*$|>\s*$|[❯›]\s*.*$)",
                 System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static readonly System.Text.RegularExpressions.Regex PowerShellPromptLineRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"^\s*PS\s+[^>\n]+>\s*$",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static readonly System.Text.RegularExpressions.Regex ProcessExitedLineRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"\[process exited with code\s+\d+\]",
+                System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static readonly System.Text.RegularExpressions.Regex ResumePickerLineRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"(tab to toggle sort|to browse|created\s+updated\s+branch\s+conversation|fast resume|resume picker|choose.*session|select.*session|loading older sessions)",
+                System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static readonly System.Text.RegularExpressions.Regex PlanModeLineRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"(plan mode|shift\+tab to cycle|exit plan mode)",
+                System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static readonly System.Text.RegularExpressions.Regex PermissionPromptLineRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"(allow this|permission|always allow|would you like to run|approve|deny)",
+                System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static readonly System.Text.RegularExpressions.Regex TrustPromptLineRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"(trust (this )?(project|folder|directory)|do you trust)",
+                System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static readonly System.Text.RegularExpressions.Regex CodexReadyLineRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"(^\s*[❯›]\s*|codex session ready|type your message)",
+                System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         private static string ClassifyLine(string line)
         {
@@ -358,6 +393,51 @@ namespace Microsoft.PowerShell
             return "output";
         }
 
+        private static string ClassifySemanticLine(string line)
+        {
+            if (string.IsNullOrEmpty(line))
+            {
+                return "output";
+            }
+
+            if (ProcessExitedLineRegex.IsMatch(line)) { return "process_exited"; }
+            if (ResumePickerLineRegex.IsMatch(line)) { return "resume_picker"; }
+            if (TrustPromptLineRegex.IsMatch(line)) { return "trust_prompt"; }
+            if (PermissionPromptLineRegex.IsMatch(line)) { return "permission_prompt"; }
+            if (PlanModeLineRegex.IsMatch(line)) { return "plan_mode"; }
+            if (CodexReadyLineRegex.IsMatch(line)) { return "codex_ready"; }
+            if (PowerShellPromptLineRegex.IsMatch(line)) { return "powershell_prompt"; }
+            if (ErrorLineRegex.IsMatch(line)) { return "error"; }
+
+            return "output";
+        }
+
+        private static string AggregateSemanticState(IEnumerable<string> semantics)
+        {
+            string[] priority =
+            {
+                "process_exited",
+                "resume_picker",
+                "trust_prompt",
+                "permission_prompt",
+                "plan_mode",
+                "codex_ready",
+                "powershell_prompt",
+                "error"
+            };
+
+            var seen = new HashSet<string>(semantics ?? System.Array.Empty<string>(), StringComparer.Ordinal);
+            foreach (string state in priority)
+            {
+                if (seen.Contains(state))
+                {
+                    return state;
+                }
+            }
+
+            return "output";
+        }
+
         // γ3 (2026-04-29): structured read of the console buffer.
         // Returns one entry per line with {lineNum, type, text}. Types are
         // "prompt" (PS prompt glyph or Claude Code ❯), "error" (matches a
@@ -377,13 +457,17 @@ namespace Microsoft.PowerShell
                 ConsoleReadResult result = WindowsConsole.Read(maxLines);
                 string[] sourceLines = result.Lines ?? System.Array.Empty<string>();
                 var typed = new object[sourceLines.Length];
+                string[] semantics = new string[sourceLines.Length];
                 for (int i = 0; i < sourceLines.Length; i++)
                 {
                     string text = sourceLines[i] ?? string.Empty;
+                    string semantic = ClassifySemanticLine(text);
+                    semantics[i] = semantic;
                     typed[i] = new
                     {
                         lineNum = i + 1,
                         type = ClassifyLine(text),
+                        semantic,
                         text
                     };
                 }
@@ -393,6 +477,7 @@ namespace Microsoft.PowerShell
                     status = "ok",
                     method = "native_console",
                     readAt,
+                    semanticState = AggregateSemanticState(semantics),
                     lines = typed,
                     width = result.Width,
                     height = result.Height,
