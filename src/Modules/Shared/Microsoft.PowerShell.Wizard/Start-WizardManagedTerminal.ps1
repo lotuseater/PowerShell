@@ -54,6 +54,12 @@ function Start-WizardManagedTerminal {
         `wizard-loops` so every loop lands as a tab in the same wt
         window. Pass any string to use a different named window.
 
+    .PARAMETER CurrentWindow
+        Spawn the tab in the current/most-recent Windows Terminal window
+        using `wt.exe -w 0 new-tab`. Intended for loop controller tabs that
+        want the controlled agent tab beside them in the same top-level
+        terminal window.
+
     .PARAMETER NewWindow
         Force the legacy `Start-Process pwsh` path (CreateNewConsole)
         instead of `wt.exe new-tab`. Use when wt.exe is unavailable
@@ -62,6 +68,12 @@ function Start-WizardManagedTerminal {
     .PARAMETER Env
         Hashtable of additional env vars to set on the spawned shell.
         Caller-supplied keys override the cmdlet's defaults.
+
+    .PARAMETER PwshExe
+        PowerShell executable or wrapper used for the spawned terminal.
+        When omitted, the cmdlet honors WIZARD_PWSH_EXE before falling
+        back to PATH discovery. This keeps callers from accidentally
+        launching a stale pwsh found earlier on PATH.
 
     .OUTPUTS
         WizardManagedTerminalResult with:
@@ -100,14 +112,19 @@ function Start-WizardManagedTerminal {
         [Parameter(ParameterSetName = 'Tab')]
         [string] $WtWindow = 'wizard-loops',
 
+        [Parameter(ParameterSetName = 'Tab')]
+        [switch] $CurrentWindow,
+
         [Parameter(ParameterSetName = 'NewWindow')]
         [switch] $NewWindow,
+
+        [string] $PwshExe,
 
         [hashtable] $Env
     )
 
     if (-not $Title) {
-        $stamp = [int][double]::Parse(((Get-Date).ToUniversalTime().Subtract([datetime]'1970-01-01T00:00:00Z')).TotalMilliseconds.ToString())
+        $stamp = [int64]((Get-Date).ToUniversalTime().Subtract([datetime]'1970-01-01T00:00:00Z')).TotalMilliseconds
         $Title = "$Provider Loop $PID-$stamp"
     }
 
@@ -131,7 +148,7 @@ function Start-WizardManagedTerminal {
     if ($Env) {
         foreach ($key in $Env.Keys) {
             $value = [string]$Env[$key]
-            $bootstrap += "`$env:$key = $(& $singleQuote $value)"
+            $bootstrap += "Set-Item -LiteralPath $(& $singleQuote ('Env:' + $key)) -Value $(& $singleQuote $value)"
         }
     }
     $bootstrap += $invoke
@@ -142,7 +159,19 @@ function Start-WizardManagedTerminal {
     $bytes = [System.Text.Encoding]::Unicode.GetBytes($launchScript)
     $encoded = [Convert]::ToBase64String($bytes)
 
-    $pwshExe = (Get-Command pwsh -ErrorAction SilentlyContinue)?.Source
+    $pwshExe = $PwshExe
+    if (-not $pwshExe) {
+        $pwshExe = $env:WIZARD_PWSH_EXE
+    }
+    if ($pwshExe) {
+        $pwshExe = [Environment]::ExpandEnvironmentVariables($pwshExe)
+        if ((Split-Path -Path $pwshExe -Parent) -and -not (Test-Path -LiteralPath $pwshExe -PathType Leaf)) {
+            throw "pwsh executable not found: $pwshExe"
+        }
+    }
+    if (-not $pwshExe) {
+        $pwshExe = (Get-Command pwsh -ErrorAction SilentlyContinue)?.Source
+    }
     if (-not $pwshExe) {
         $pwshExe = (Get-Command pwsh.exe -ErrorAction SilentlyContinue)?.Source
     }
@@ -158,21 +187,62 @@ function Start-WizardManagedTerminal {
         }
     }
 
+    function ConvertTo-WizardNativeArgumentString {
+        param([string[]] $ArgumentList)
+
+        $quoted = foreach ($arg in $ArgumentList) {
+            $value = [string] $arg
+            if ($value.Length -gt 0 -and $value -notmatch '[\s"]') {
+                $value
+                continue
+            }
+
+            $builder = [System.Text.StringBuilder]::new()
+            [void] $builder.Append('"')
+            $backslashes = 0
+            foreach ($ch in $value.ToCharArray()) {
+                if ($ch -eq '\') {
+                    $backslashes++
+                    continue
+                }
+                if ($ch -eq '"') {
+                    [void] $builder.Append('\' * (($backslashes * 2) + 1))
+                    [void] $builder.Append('"')
+                    $backslashes = 0
+                    continue
+                }
+                if ($backslashes -gt 0) {
+                    [void] $builder.Append('\' * $backslashes)
+                    $backslashes = 0
+                }
+                [void] $builder.Append($ch)
+            }
+            if ($backslashes -gt 0) {
+                [void] $builder.Append('\' * ($backslashes * 2))
+            }
+            [void] $builder.Append('"')
+            $builder.ToString()
+        }
+
+        $quoted -join ' '
+    }
+
     $usingTab = ($PSCmdlet.ParameterSetName -eq 'Tab') -and $wtExe
     if ($usingTab) {
+        $targetWindow = if ($CurrentWindow) { '0' } else { $WtWindow }
         # `wt.exe -w <window> new-tab -d <cwd> --title <title> pwsh -NoLogo -EncodedCommand <b64>`
         $argv = @(
-            '-w', $WtWindow,
+            '-w', $targetWindow,
             'new-tab',
             '-d', $Cwd,
             '--title', $Title,
             $pwshExe, '-NoLogo', '-EncodedCommand', $encoded
         )
-        $proc = Start-Process -FilePath $wtExe -ArgumentList $argv -PassThru
-        $channel = 'wt_new_tab'
+        $proc = Start-Process -FilePath $wtExe -ArgumentList (ConvertTo-WizardNativeArgumentString $argv) -PassThru
+        $channel = if ($CurrentWindow) { 'wt_current_tab' } else { 'wt_new_tab' }
     } else {
         $argv = @('-NoLogo', '-EncodedCommand', $encoded)
-        $proc = Start-Process -FilePath $pwshExe -ArgumentList $argv -PassThru -WindowStyle Normal
+        $proc = Start-Process -FilePath $pwshExe -ArgumentList (ConvertTo-WizardNativeArgumentString $argv) -PassThru -WindowStyle Normal
         $channel = 'new_console'
     }
 
@@ -181,7 +251,11 @@ function Start-WizardManagedTerminal {
     # can wait + connect by name. The actual spawned PID lives under
     # the returned process's tree; WizardErasmus walks descendants via
     # `_candidate_console_pids`.
-    $predictedPipe = ''  # leave empty; consumer discovers via Get-WizardSessions
+    $predictedPipe = if ($Env -and $Env.ContainsKey('WIZARD_PWSH_CONTROL_PIPE')) {
+        [string] $Env['WIZARD_PWSH_CONTROL_PIPE']
+    } else {
+        ''
+    }
 
     return [pscustomobject]@{
         PSTypeName = 'WizardManagedTerminalResult'
@@ -192,6 +266,7 @@ function Start-WizardManagedTerminal {
         Channel    = $channel
         Provider   = $Provider
         Cwd        = $Cwd
-        WtWindow   = if ($usingTab) { $WtWindow } else { '' }
+        WtWindow   = if ($usingTab) { if ($CurrentWindow) { '0' } else { $WtWindow } } else { '' }
+        WindowTarget = if ($usingTab) { if ($CurrentWindow) { 'current' } else { 'named' } } else { 'new' }
     }
 }

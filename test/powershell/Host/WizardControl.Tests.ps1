@@ -55,6 +55,21 @@ Describe "Wizard PowerShell control pipe" -Tags "Feature" {
             $status.status | Should -BeExactly "ok"
             $status.pid | Should -Be $process.Id
             $status.pipe | Should -BeExactly $pipeName
+
+            $read = Send-WizardControlRequest -PipeName $pipeName -Payload @{ command = "read"; maxLines = 5 }
+            $read.status | Should -BeIn @("ok", "error")
+            $read.method | Should -BeExactly "native_console"
+            $read.readAt | Should -Not -BeNullOrEmpty
+
+            $structured = Send-WizardControlRequest -PipeName $pipeName -Payload @{ command = "read.structured"; maxLines = 5 }
+            $structured.status | Should -BeIn @("ok", "error")
+            $structured.method | Should -BeExactly "native_console"
+            $structured.readAt | Should -Not -BeNullOrEmpty
+
+            $write = Send-WizardControlRequest -PipeName $pipeName -Payload @{ command = "write"; text = ""; submit = $false }
+            $write.status | Should -BeIn @("ok", "error")
+            $write.method | Should -BeExactly "native_console"
+            $write.writeAt | Should -Not -BeNullOrEmpty
         }
         finally {
             if ($process -and -not $process.HasExited) {

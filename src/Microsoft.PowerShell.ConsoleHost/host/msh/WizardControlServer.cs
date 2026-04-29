@@ -292,22 +292,31 @@ namespace Microsoft.PowerShell
 
         private static object Read(int maxLines)
         {
+            DateTimeOffset readAt = DateTimeOffset.UtcNow;
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                return new { status = "error", error = "unsupported_platform" };
+                return new { status = "error", method = "native_console", readAt, error = "unsupported_platform" };
             }
 
-            ConsoleReadResult result = WindowsConsole.Read(maxLines);
-            return new
+            try
             {
-                status = "ok",
-                method = "native_console",
-                text = result.Text,
-                lines = result.Lines,
-                width = result.Width,
-                height = result.Height,
-                window = result.Window
-            };
+                ConsoleReadResult result = WindowsConsole.Read(maxLines);
+                return new
+                {
+                    status = "ok",
+                    method = "native_console",
+                    readAt,
+                    text = result.Text,
+                    lines = result.Lines,
+                    width = result.Width,
+                    height = result.Height,
+                    window = result.Window
+                };
+            }
+            catch (Exception exception)
+            {
+                return new { status = "error", method = "native_console", readAt, error = exception.GetType().Name, message = exception.Message };
+            }
         }
 
         // Match `error CS1234:` / `Error: ...` / `Exception:` etc. without
@@ -357,45 +366,62 @@ namespace Microsoft.PowerShell
         // `docs/wizard/Not_Finished.md` for the original spec.
         private static object ReadStructured(int maxLines)
         {
+            DateTimeOffset readAt = DateTimeOffset.UtcNow;
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                return new { status = "error", error = "unsupported_platform" };
+                return new { status = "error", method = "native_console", readAt, error = "unsupported_platform" };
             }
 
-            ConsoleReadResult result = WindowsConsole.Read(maxLines);
-            string[] sourceLines = result.Lines ?? System.Array.Empty<string>();
-            var typed = new object[sourceLines.Length];
-            for (int i = 0; i < sourceLines.Length; i++)
+            try
             {
-                string text = sourceLines[i] ?? string.Empty;
-                typed[i] = new
+                ConsoleReadResult result = WindowsConsole.Read(maxLines);
+                string[] sourceLines = result.Lines ?? System.Array.Empty<string>();
+                var typed = new object[sourceLines.Length];
+                for (int i = 0; i < sourceLines.Length; i++)
                 {
-                    lineNum = i + 1,
-                    type = ClassifyLine(text),
-                    text
+                    string text = sourceLines[i] ?? string.Empty;
+                    typed[i] = new
+                    {
+                        lineNum = i + 1,
+                        type = ClassifyLine(text),
+                        text
+                    };
+                }
+
+                return new
+                {
+                    status = "ok",
+                    method = "native_console",
+                    readAt,
+                    lines = typed,
+                    width = result.Width,
+                    height = result.Height,
+                    window = result.Window
                 };
             }
-
-            return new
+            catch (Exception exception)
             {
-                status = "ok",
-                method = "native_console",
-                lines = typed,
-                width = result.Width,
-                height = result.Height,
-                window = result.Window
-            };
+                return new { status = "error", method = "native_console", readAt, error = exception.GetType().Name, message = exception.Message };
+            }
         }
 
         private static object Write(string text, bool submit)
         {
+            DateTimeOffset writeAt = DateTimeOffset.UtcNow;
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                return new { status = "error", error = "unsupported_platform" };
+                return new { status = "error", method = "native_console", writeAt, error = "unsupported_platform" };
             }
 
-            int written = WindowsConsole.WriteInput(submit ? text + "\r" : text);
-            return new { status = "ok", method = "native_console", written };
+            try
+            {
+                int written = WindowsConsole.WriteInput(submit ? text + "\r" : text);
+                return new { status = "ok", method = "native_console", writeAt, written };
+            }
+            catch (Exception exception)
+            {
+                return new { status = "error", method = "native_console", writeAt, error = exception.GetType().Name, message = exception.Message };
+            }
         }
 
         private void WriteSessionRecord()
