@@ -54,16 +54,22 @@ class WizardSessionInfo:
     cwd: str
     executable: str
     started_at: str
+    updated_at: str
+    protocol: int
+    session_path: str
     is_alive: bool
 
     @classmethod
-    def from_record(cls, record: dict) -> "WizardSessionInfo":
+    def from_record(cls, record: dict, *, session_path: str = "") -> "WizardSessionInfo":
         return cls(
             pid=int(record.get("pid", 0)),
             pipe_name=str(record.get("pipe", "")),
             cwd=str(record.get("cwd", "")),
             executable=str(record.get("executable", "")),
             started_at=str(record.get("startedAt", "")),
+            updated_at=str(record.get("updatedAt", "")),
+            protocol=int(record.get("protocol", 0) or 0),
+            session_path=str(session_path or ""),
             is_alive=False,  # filled in by list_sessions()
         )
 
@@ -128,7 +134,7 @@ def list_sessions(
             # OSError covers TOCTOU races where the wizard pwsh exits between glob
             # and read; ValueError covers JSON decode failures.
             continue
-        info = WizardSessionInfo.from_record(record)
+        info = WizardSessionInfo.from_record(record, session_path=str(entry))
         info.is_alive = _is_pid_alive(info.pid)
         if not info.is_alive and not include_stale:
             continue
@@ -251,6 +257,15 @@ class WizardPwshClient:
 
     def status(self) -> dict:
         return self._send({"command": "status"})
+
+    def status_extended(self) -> dict:
+        """γ2 — same fields as status() plus currentCommand / lastCommand / historyCount.
+
+        Lets a Python caller see what's running in the tab without OCR. The extended
+        fields are best-effort: a fresh shell with no command history yet returns
+        ``currentCommand=None``, ``lastCommand=None``, ``historyCount=0``.
+        """
+        return self._send({"command": "status.extended"})
 
     def read(self, max_lines: int = 120) -> dict:
         return self._send({"command": "read", "maxLines": max_lines})
