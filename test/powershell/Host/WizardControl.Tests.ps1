@@ -39,6 +39,9 @@ Describe "Wizard PowerShell control pipe" -Tags "Feature" {
         $startInfo.FileName = $powershell
         $startInfo.Arguments = "-NoLogo -NoProfile -NoExit"
         $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
         $startInfo.Environment["WIZARD_PWSH_CONTROL"] = "1"
         $startInfo.Environment["WIZARD_PWSH_CONTROL_PIPE"] = $pipeName
 
