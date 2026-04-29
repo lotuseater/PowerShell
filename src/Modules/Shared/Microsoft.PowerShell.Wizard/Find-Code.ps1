@@ -49,6 +49,7 @@ function Find-Code {
         '!nuget-artifacts/**', '!.venv/**', '!venv/**', '!__pycache__/**',
         '!.pytest_cache/**', '!.mypy_cache/**', '!.ruff_cache/**',
         '!storage/**', '!artifacts/**', '!tmp/**', '!logfile/**', '!crtf/**',
+        '!data/**', '!**/data/**', '!**/*.jsonl', '!**/apply*_stdout.json',
         '!**/pester-analysis-*/**', '!test/perf/BenchmarkDotNet.Artifacts/**',
         '!*.dll', '!*.pdb', '!*.nupkg', '!*.zip', '!*.tar.gz', '!*.binlog',
         '!*.log', '!*.min.js', '!*.map'
@@ -73,6 +74,9 @@ function Find-Code {
     if ($Compact -and -not $Json -and -not $FilesOnly) {
         # rg default: path:line:col:text  on hit lines; group separators "--" between context.
         return $output | Where-Object { $_ -and $_ -notmatch '^--$' } | Select-Object -First $MaxCount
+    }
+    if ($FilesOnly -or (-not $Json)) {
+        return $output | Select-Object -First $MaxCount
     }
     $hardCap = if ($MaxCount -lt 1024) { 1024 } else { $MaxCount * 4 }
     return $output | Select-Object -First $hardCap

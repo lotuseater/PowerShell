@@ -8,7 +8,7 @@ CompatiblePSEditions = @("Core")
 PowerShellVersion="7.0"
 RootModule="Microsoft.PowerShell.Wizard.psm1"
 Description="Opt-in agent runtime cmdlets for the wizard_power_shell fork. Active only when WIZARD_PWSH_CONTROL=1."
-FunctionsToExport = @("Get-WizardSession", "Get-WizardSessions", "Invoke-Bounded", "Get-WizardLog", "Get-WizardLogs", "Publish-WizardSignal", "Read-WizardSignal", "Send-WizardLoopWake", "Connect-WizardPwshSession", "Start-WizardManagedTerminal", "Start-MonitoredProcess", "Invoke-BashCompat", "Find-Code", "Find-Repos", "Find-CodeAcrossRepos", "Get-AIContext", "Get-RepoProfile", "Invoke-RepoBuild", "Invoke-RepoTest", "Update-RepoDigest", "Measure-RepoSearch", "Test-WizardBuildPrereqs", "Use-WizardLock", "Clear-WizardLock", "Set-ClaudeTrust", "Invoke-WizardHook", "Invoke-AntQuery", "Initialize-WizardHookHost")
+FunctionsToExport = @("Get-WizardSession", "Get-WizardSessions", "Clear-WizardStaleSessions", "Get-WizardLoopSessions", "Close-WizardExitedLoopTab", "Invoke-Bounded", "Get-WizardLog", "Get-WizardLogs", "Publish-WizardSignal", "Read-WizardSignal", "Send-WizardLoopWake", "Connect-WizardPwshSession", "Start-WizardManagedTerminal", "Start-MonitoredProcess", "Invoke-BashCompat", "Find-Code", "Find-Repos", "Find-CodeAcrossRepos", "Get-AIContext", "Get-RepoProfile", "Invoke-RepoBuild", "Invoke-RepoTest", "Update-RepoDigest", "Measure-RepoSearch", "Test-WizardBuildPrereqs", "Use-WizardLock", "Clear-WizardLock", "Set-ClaudeTrust", "Invoke-WizardHook", "Invoke-AntQuery", "Initialize-WizardHookHost", "Build-FirstMovesCorpus", "Get-WizardEmbedService", "Stop-WizardEmbedService", "Get-WizardFirstMovesStats", "Repair-WizardPowerShellRelease")
 CmdletsToExport = @()
 AliasesToExport = @("bash", "sh")
 VariablesToExport = @()

@@ -17,6 +17,12 @@ function Invoke-RepoBuild {
     $repo = Get-RepoProfile -Path $Path
     Push-Location $repo.Root
     try {
+        if ($repo.IsWizardErasmus) {
+            if (-not (Test-Path -LiteralPath (Join-Path $repo.Root 'build'))) {
+                Invoke-Bounded -FilePath 'cmake' -ArgumentList @('--preset', 'default') -TimeoutSec $TimeoutSec -Quiet | Out-Null
+            }
+            return Invoke-Bounded -FilePath 'cmake' -ArgumentList @('--build', 'build') -TimeoutSec $TimeoutSec -Quiet:$Quiet
+        }
         if ($repo.HasBuildPsm1) {
             return Invoke-Bounded -FilePath (Get-Process -Id $PID).Path -ArgumentList @('-NoProfile', '-Command', 'Import-Module ./build.psm1 -Force; Start-PSBuild') -TimeoutSec $TimeoutSec -Quiet:$Quiet
         }

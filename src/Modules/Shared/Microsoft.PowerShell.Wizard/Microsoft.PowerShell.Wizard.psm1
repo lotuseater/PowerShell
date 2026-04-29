@@ -3,6 +3,9 @@
 
 . $PSScriptRoot/Get-WizardSession.ps1
 . $PSScriptRoot/Get-WizardSessions.ps1
+. $PSScriptRoot/Clear-WizardStaleSessions.ps1
+. $PSScriptRoot/Get-WizardLoopSessions.ps1
+. $PSScriptRoot/Close-WizardExitedLoopTab.ps1
 . $PSScriptRoot/Invoke-Bounded.ps1
 . $PSScriptRoot/Get-WizardLog.ps1
 . $PSScriptRoot/Get-WizardLogs.ps1
@@ -34,14 +37,38 @@
 . $PSScriptRoot/Get-WizardEmbedService.ps1
 . $PSScriptRoot/Stop-WizardEmbedService.ps1
 . $PSScriptRoot/Get-WizardFirstMovesStats.ps1
+. $PSScriptRoot/Repair-WizardPowerShellRelease.ps1
 
-Export-ModuleMember -Function 'Get-WizardSession', 'Get-WizardSessions', 'Invoke-Bounded', 'Get-WizardLog', 'Get-WizardLogs', 'Publish-WizardSignal', 'Read-WizardSignal', 'Send-WizardLoopWake', 'Connect-WizardPwshSession', 'Start-WizardManagedTerminal', 'Start-MonitoredProcess', 'Invoke-BashCompat', 'Find-Code', 'Find-Repos', 'Find-CodeAcrossRepos', 'Get-AIContext', 'Get-RepoProfile', 'Invoke-RepoBuild', 'Invoke-RepoTest', 'Update-RepoDigest', 'Measure-RepoSearch', 'Test-WizardBuildPrereqs', 'Use-WizardLock', 'Clear-WizardLock', 'Set-ClaudeTrust', 'Invoke-WizardHook', 'Invoke-AntQuery', 'Initialize-WizardHookHost', 'Build-FirstMovesCorpus', 'Get-WizardEmbedService', 'Stop-WizardEmbedService', 'Get-WizardFirstMovesStats'
+Export-ModuleMember -Function 'Get-WizardSession', 'Get-WizardSessions', 'Clear-WizardStaleSessions', 'Get-WizardLoopSessions', 'Close-WizardExitedLoopTab', 'Invoke-Bounded', 'Get-WizardLog', 'Get-WizardLogs', 'Publish-WizardSignal', 'Read-WizardSignal', 'Send-WizardLoopWake', 'Connect-WizardPwshSession', 'Start-WizardManagedTerminal', 'Start-MonitoredProcess', 'Invoke-BashCompat', 'Find-Code', 'Find-Repos', 'Find-CodeAcrossRepos', 'Get-AIContext', 'Get-RepoProfile', 'Invoke-RepoBuild', 'Invoke-RepoTest', 'Update-RepoDigest', 'Measure-RepoSearch', 'Test-WizardBuildPrereqs', 'Use-WizardLock', 'Clear-WizardLock', 'Set-ClaudeTrust', 'Invoke-WizardHook', 'Invoke-AntQuery', 'Initialize-WizardHookHost', 'Build-FirstMovesCorpus', 'Get-WizardEmbedService', 'Stop-WizardEmbedService', 'Get-WizardFirstMovesStats', 'Repair-WizardPowerShellRelease'
 
 # Register bash / sh aliases ONLY when the wizard control plane is on. Otherwise leave the
 # user's PATH bash.exe alone — these aliases are agent-mode glue, not user-facing reskinning.
 if ($env:WIZARD_PWSH_CONTROL -in @('1', 'true', 'True', 'yes')) {
     Set-Alias -Name 'bash' -Value 'Invoke-BashCompat' -Scope Global -Force
     Set-Alias -Name 'sh'   -Value 'Invoke-BashCompat' -Scope Global -Force
+}
+
+# Optional async hook warmup for controlled agent shells. The pipe request is sent from a
+# detached child so profile/module import does not block the interactive prompt.
+$wizardHookWarmup = ($env:WIZARD_HOOK_WARMUP + '').ToLowerInvariant()
+if ($env:WIZARD_PWSH_CONTROL -in @('1', 'true', 'True', 'yes') -and
+    $wizardHookWarmup -notin @('0', 'false', 'no', 'off')) {
+    try {
+        $hookNamesRaw = if ($env:WIZARD_HOOK_WARMUP_NAMES) { $env:WIZARD_HOOK_WARMUP_NAMES } else { 'cognitive_pulse,pretool_cache' }
+        $hookNames = @($hookNamesRaw -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        if ($hookNames.Count -gt 0) {
+            $pipeName = if ($env:WIZARD_PWSH_CONTROL_PIPE) { $env:WIZARD_PWSH_CONTROL_PIPE } else { "wizard-pwsh-$PID" }
+            $pwshPath = (Get-Process -Id $PID).Path
+            $requestPath = Join-Path $PSScriptRoot 'Send-WizardControlRequest.ps1'
+            $hookLiteral = '@(' + (($hookNames | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ',') + ')'
+            $warmupScript = @"
+Start-Sleep -Milliseconds 250
+. '$($requestPath.Replace("'", "''"))'
+Send-WizardControlRequest -PipeName '$($pipeName.Replace("'", "''"))' -ConnectTimeoutMs 1000 -Payload @{ command = 'hook.warmup'; names = $hookLiteral; timeoutMs = 30000 } | Out-Null
+"@
+            Start-Process -FilePath $pwshPath -ArgumentList @('-NoLogo', '-NoProfile', '-Command', $warmupScript) -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+        }
+    } catch { }
 }
 
 # Wizard build identity. Adds $PSVersionTable['WizardBuild'] = '<config>-<utc-date>' so

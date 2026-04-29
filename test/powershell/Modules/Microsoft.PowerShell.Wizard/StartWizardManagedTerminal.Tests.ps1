@@ -161,6 +161,39 @@ Describe "Start-WizardManagedTerminal" -Tags "Feature" {
         $global:WizardManagedTerminalTestCaptured.ArgumentList | Should -Match '-EncodedCommand'
     }
 
+    It "sets control env before starting the child process" {
+        $global:WizardManagedTerminalTestCaptured = @{}
+        $beforePipe = $env:WIZARD_PWSH_CONTROL_PIPE
+        $beforeControl = $env:WIZARD_PWSH_CONTROL
+        Mock -CommandName Start-Process -MockWith {
+            param($FilePath, $ArgumentList)
+            $global:WizardManagedTerminalTestCaptured['FilePath'] = $FilePath
+            $global:WizardManagedTerminalTestCaptured['ArgumentList'] = $ArgumentList
+            $global:WizardManagedTerminalTestCaptured['Pipe'] = $env:WIZARD_PWSH_CONTROL_PIPE
+            $global:WizardManagedTerminalTestCaptured['Control'] = $env:WIZARD_PWSH_CONTROL
+            return [pscustomobject]@{ Id = 4248 }
+        } -ModuleName Microsoft.PowerShell.Wizard
+        Mock -CommandName Get-Command -ModuleName Microsoft.PowerShell.Wizard -ParameterFilter {
+            $Name -eq 'pwsh'
+        } -MockWith { [pscustomobject]@{ Source = 'C:\fake\pwsh.exe' } }
+
+        try {
+            $result = Start-WizardManagedTerminal `
+                -Provider codex `
+                -ChildArgs @('--version') `
+                -SessionId 'codex-test-env-before-start' `
+                -NewWindow `
+                -Env @{ WIZARD_PWSH_CONTROL_PIPE = 'wizard-loop-codex-env-before-start' }
+
+            $result.Pipe | Should -Be 'wizard-loop-codex-env-before-start'
+            $global:WizardManagedTerminalTestCaptured.Pipe | Should -Be 'wizard-loop-codex-env-before-start'
+            $global:WizardManagedTerminalTestCaptured.Control | Should -Be '1'
+        } finally {
+            $env:WIZARD_PWSH_CONTROL_PIPE | Should -Be $beforePipe
+            $env:WIZARD_PWSH_CONTROL | Should -Be $beforeControl
+        }
+    }
+
     It "uses explicit PwshExe instead of PATH discovery" {
         $global:WizardManagedTerminalTestCaptured = @{}
         Mock -CommandName Start-Process -MockWith {

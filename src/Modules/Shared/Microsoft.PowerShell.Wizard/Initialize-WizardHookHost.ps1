@@ -38,6 +38,7 @@ function Initialize-WizardHookHost {
         [string[]] $Hooks,
 
         [int] $TimeoutMs = 30000,
+        [int] $ConnectTimeoutMs = 5000,
         [string] $PipeName
     )
 
@@ -47,5 +48,5 @@ function Initialize-WizardHookHost {
         timeoutMs = $TimeoutMs
     }
 
-    Send-WizardControlRequest -Payload $body -PipeName $PipeName -ConnectTimeoutMs 5000
+    Send-WizardControlRequest -Payload $body -PipeName $PipeName -ConnectTimeoutMs $ConnectTimeoutMs
 }

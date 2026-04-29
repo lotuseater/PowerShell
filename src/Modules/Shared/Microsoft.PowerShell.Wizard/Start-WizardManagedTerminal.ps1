@@ -139,6 +139,17 @@ function Start-WizardManagedTerminal {
         "& $Provider"
     }
 
+    $launchEnv = @{
+        WIZARD_PWSH_CONTROL = '1'
+        WIZARD_MANAGED_TERMINAL_SESSION_ID = $SessionId
+        WIZARD_MANAGED_TERMINAL_PROVIDER = $Provider
+    }
+    if ($Env) {
+        foreach ($key in $Env.Keys) {
+            $launchEnv[[string]$key] = [string]$Env[$key]
+        }
+    }
+
     $bootstrap = @(
         "`$Host.UI.RawUI.WindowTitle = $(& $singleQuote $Title)"
         "`$env:WIZARD_MANAGED_TERMINAL_SESSION_ID = $(& $singleQuote $SessionId)"
@@ -227,6 +238,39 @@ function Start-WizardManagedTerminal {
         $quoted -join ' '
     }
 
+    function Start-WizardProcessWithEnvironment {
+        param(
+            [Parameter(Mandatory)]
+            [string] $FilePath,
+
+            [Parameter(Mandatory)]
+            [string] $ArgumentList,
+
+            [Parameter(Mandatory)]
+            [hashtable] $Environment,
+
+            [switch] $NormalWindow
+        )
+
+        $previous = @{}
+        try {
+            foreach ($key in $Environment.Keys) {
+                $name = [string] $key
+                $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+                [Environment]::SetEnvironmentVariable($name, [string] $Environment[$key], 'Process')
+            }
+            if ($NormalWindow) {
+                return Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru -WindowStyle Normal
+            }
+            return Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru
+        } finally {
+            foreach ($key in $Environment.Keys) {
+                $name = [string] $key
+                [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process')
+            }
+        }
+    }
+
     $usingTab = ($PSCmdlet.ParameterSetName -eq 'Tab') -and $wtExe
     if ($usingTab) {
         $targetWindow = if ($CurrentWindow) { '0' } else { $WtWindow }
@@ -238,11 +282,18 @@ function Start-WizardManagedTerminal {
             '--title', $Title,
             $pwshExe, '-NoLogo', '-EncodedCommand', $encoded
         )
-        $proc = Start-Process -FilePath $wtExe -ArgumentList (ConvertTo-WizardNativeArgumentString $argv) -PassThru
+        $proc = Start-WizardProcessWithEnvironment `
+            -FilePath $wtExe `
+            -ArgumentList (ConvertTo-WizardNativeArgumentString $argv) `
+            -Environment $launchEnv
         $channel = if ($CurrentWindow) { 'wt_current_tab' } else { 'wt_new_tab' }
     } else {
         $argv = @('-NoLogo', '-EncodedCommand', $encoded)
-        $proc = Start-Process -FilePath $pwshExe -ArgumentList (ConvertTo-WizardNativeArgumentString $argv) -PassThru -WindowStyle Normal
+        $proc = Start-WizardProcessWithEnvironment `
+            -FilePath $pwshExe `
+            -ArgumentList (ConvertTo-WizardNativeArgumentString $argv) `
+            -Environment $launchEnv `
+            -NormalWindow
         $channel = 'new_console'
     }
 
