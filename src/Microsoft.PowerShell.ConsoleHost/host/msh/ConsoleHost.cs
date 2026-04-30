@@ -1812,9 +1812,18 @@ namespace Microsoft.PowerShell
             _readyForInputTimeInMS = (DateTime.Now - Process.GetCurrentProcess().StartTime).TotalMilliseconds;
 #endif
 
-            _wizardControlServer ??= WizardControlServer.StartIfEnabled(this);
+            if (ShouldStartWizardControlServer())
+            {
+                _wizardControlServer ??= WizardControlServer.StartIfEnabled(this);
+            }
+
             ApplyWizardStartupHardening();
             DoRunspaceInitialization(args);
+        }
+
+        private static bool ShouldStartWizardControlServer()
+        {
+            return WizardControlServer.IsEnabled && !s_cpp.NonInteractive;
         }
 
         /// <summary>
