@@ -84,6 +84,11 @@ namespace Microsoft.PowerShell
             Directory.CreateDirectory(root);
             string sessionPath = Path.Combine(root, Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + ".json");
 
+            if (IsPipeOwnedByAnotherLiveProcess(root, pipeName))
+            {
+                return null;
+            }
+
             try
             {
                 return new WizardControlServer(host, pipeName, sessionPath);
@@ -121,6 +126,58 @@ namespace Microsoft.PowerShell
             return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsPipeOwnedByAnotherLiveProcess(string sessionRoot, string pipeName)
+        {
+            if (string.IsNullOrWhiteSpace(sessionRoot) || string.IsNullOrWhiteSpace(pipeName))
+            {
+                return false;
+            }
+
+            try
+            {
+                foreach (string path in Directory.EnumerateFiles(sessionRoot, "*.json"))
+                {
+                    if (IsLiveSessionForPipe(path, pipeName))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static bool IsLiveSessionForPipe(string path, string pipeName)
+        {
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
+                JsonElement root = document.RootElement;
+                if (!root.TryGetProperty("pipe", out JsonElement pipeElement)
+                    || !string.Equals(pipeElement.GetString(), pipeName, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                if (!root.TryGetProperty("pid", out JsonElement pidElement)
+                    || !pidElement.TryGetInt32(out int pid)
+                    || pid == Environment.ProcessId)
+                {
+                    return false;
+                }
+
+                using Process owner = Process.GetProcessById(pid);
+                return !owner.HasExited;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private async Task RunAsync()
