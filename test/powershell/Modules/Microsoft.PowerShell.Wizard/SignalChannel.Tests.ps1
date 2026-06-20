@@ -214,13 +214,19 @@ Describe "Wizard signal channel" -Tags "Feature" {
             $proc.StandardInput.WriteLine($script)
             $proc.StandardInput.Flush()
 
-            # Poll for events for up to ~6 seconds.
-            $deadline = (Get-Date).AddSeconds(8)
+            # Poll long enough for loaded full-folder Pester runs where process
+            # startup and the named-pipe signal loop can both be delayed.
+            $deadline = (Get-Date).AddSeconds(20)
             $allEvents = @()
             while ((Get-Date) -lt $deadline) {
                 $r = Send-WizardRequest -PipeName $pipeName -Payload @{ command = 'signal.subscribe'; topic = 'phase4.proc'; since = 0; limit = 100 }
                 if ($r.events) { $allEvents = $r.events }
-                if ($allEvents.state -contains 'exited' -or ($allEvents | Where-Object { $_.data.state -eq 'exited' })) { break }
+                $currentStates = @($allEvents | ForEach-Object { $_.data.state })
+                if ($currentStates -contains 'started' -and
+                    $currentStates -contains 'heartbeat' -and
+                    $currentStates -contains 'exited') {
+                    break
+                }
                 Start-Sleep -Milliseconds 500
             }
 

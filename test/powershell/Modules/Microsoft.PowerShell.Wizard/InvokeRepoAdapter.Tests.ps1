@@ -3,6 +3,7 @@
 
 Describe "Invoke-RepoBuild / Invoke-RepoTest adapters" -Tags "Feature" {
     BeforeAll {
+        Get-Module Microsoft.PowerShell.Wizard | Remove-Module -Force
         $modulePath = Join-Path $PSScriptRoot '..' '..' '..' '..' 'src' 'Modules' 'Shared' 'Microsoft.PowerShell.Wizard' 'Microsoft.PowerShell.Wizard.psd1'
         $modulePath = Resolve-Path $modulePath
         Import-Module $modulePath -Force
@@ -52,5 +53,47 @@ Describe "Invoke-RepoBuild / Invoke-RepoTest adapters" -Tags "Feature" {
         ($captured.Args -join ' ') | Should -Match 'ai_wrappers/test_loop_no_focus_live\.py'
         ($captured.Args -join ' ') | Should -Match 'real_visual_codex_loop'
         $captured.Live | Should -BeExactly '1'
+    }
+
+    It "auto-routes Wizard_Erasmus pytest node ids to the Python lane" {
+        $repoRoot = Join-Path $TestDrive 'Wizard_Erasmus'
+        New-Item -ItemType Directory -Force -Path $repoRoot | Out-Null
+        $captured = @{}
+
+        Mock -CommandName Get-RepoProfile -ModuleName Microsoft.PowerShell.Wizard -MockWith {
+            [pscustomobject]@{ Root = $repoRoot; IsWizardErasmus = $true; HasBuildPsm1 = $false; HasSolution = $false; HasCMakeLists = $true; HasPyProject = $true; HasPyTests = $true; HasPackageJson = $false }
+        }
+        Mock -CommandName Invoke-Bounded -ModuleName Microsoft.PowerShell.Wizard -MockWith {
+            param([string]$FilePath, [string[]]$ArgumentList)
+            $captured.FilePath = $FilePath
+            $captured.Args = $ArgumentList
+            [pscustomobject]@{ PSTypeName='WizardBoundedResult'; ExitCode = 0; KilledByTimeout = $false; LogPath = 'test.log' }
+        }
+
+        Invoke-RepoTest -Path $repoRoot -TestPath 'ai_wrappers/test_idle_watch_loop.py::test_stale_working_status_above_prompt_allows_full_period_nudge' -Filter 'stale and not live' -Quiet | Out-Null
+
+        $captured.FilePath | Should -BeExactly 'python'
+        ($captured.Args -join ' ') | Should -Match '^-m pytest -q ai_wrappers/test_idle_watch_loop\.py::test_stale_working_status_above_prompt_allows_full_period_nudge -k stale and not live$'
+    }
+
+    It "passes Filter through to CTest regex selection" {
+        $repoRoot = Join-Path $TestDrive 'Wizard_Erasmus'
+        New-Item -ItemType Directory -Force -Path $repoRoot | Out-Null
+        $captured = @{}
+
+        Mock -CommandName Get-RepoProfile -ModuleName Microsoft.PowerShell.Wizard -MockWith {
+            [pscustomobject]@{ Root = $repoRoot; IsWizardErasmus = $true; HasBuildPsm1 = $false; HasSolution = $false; HasCMakeLists = $true; HasPyProject = $true; HasPyTests = $true; HasPackageJson = $false }
+        }
+        Mock -CommandName Invoke-Bounded -ModuleName Microsoft.PowerShell.Wizard -MockWith {
+            param([string]$FilePath, [string[]]$ArgumentList)
+            $captured.FilePath = $FilePath
+            $captured.Args = $ArgumentList
+            [pscustomobject]@{ PSTypeName='WizardBoundedResult'; ExitCode = 0; KilledByTimeout = $false; LogPath = 'test.log' }
+        }
+
+        Invoke-RepoTest -Path $repoRoot -Filter 'governor' -Quiet | Out-Null
+
+        $captured.FilePath | Should -BeExactly 'ctest'
+        ($captured.Args -join ' ') | Should -BeExactly '--test-dir build --output-on-failure -R governor'
     }
 }

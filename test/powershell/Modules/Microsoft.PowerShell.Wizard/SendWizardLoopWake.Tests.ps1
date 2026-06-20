@@ -3,6 +3,7 @@
 
 Describe "Send-WizardLoopWake" -Tags "Feature" {
     BeforeAll {
+        Get-Module Microsoft.PowerShell.Wizard | Remove-Module -Force
         $modulePath = Join-Path $PSScriptRoot '..' '..' '..' '..' 'src' 'Modules' 'Shared' 'Microsoft.PowerShell.Wizard' 'Microsoft.PowerShell.Wizard.psd1'
         $modulePath = Resolve-Path $modulePath
         Import-Module $modulePath -Force
