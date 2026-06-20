@@ -180,6 +180,37 @@ namespace Microsoft.PowerShell
             }
         }
 
+        private static bool IsWizardPowerShellExecutable(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                string full = Path.GetFullPath(path);
+                string userProfile = Environment.GetEnvironmentVariable("USERPROFILE") ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(userProfile))
+                {
+                    string userBin = Path.GetFullPath(Path.Combine(userProfile, "bin", "pwsh.exe"));
+                    if (string.Equals(full, userBin, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+
+                    string repoRoot = Path.GetFullPath(Path.Combine(userProfile, "Documents", "GitHub", "PowerShell"));
+                    return full.StartsWith(repoRoot, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(Path.GetFileName(full), "pwsh.exe", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
         private async Task RunAsync()
         {
             while (!_cancel.IsCancellationRequested)
@@ -252,6 +283,9 @@ namespace Microsoft.PowerShell
                         return JsonSerializer.Serialize(ReadStructured(GetInt(root, "maxLines", 200)));
                     case "write":
                         return JsonSerializer.Serialize(Write(GetString(root, "text") ?? string.Empty, GetBool(root, "submit", false)));
+                    case "keys":
+                    case "sendkeys":
+                        return JsonSerializer.Serialize(SendKeys(GetString(root, "keys") ?? GetString(root, "text") ?? string.Empty));
                     case "interrupt":
                         _host.WizardInterruptCurrentPipeline();
                         return JsonSerializer.Serialize(new { status = "ok", command });
@@ -296,6 +330,7 @@ namespace Microsoft.PowerShell
                 startedAt = _startedAt,
                 processName = process.ProcessName,
                 executable = Environment.ProcessPath,
+                shellIsWizardPwsh = IsWizardPowerShellExecutable(Environment.ProcessPath),
                 cwd = Environment.CurrentDirectory
             };
         }
@@ -310,6 +345,8 @@ namespace Microsoft.PowerShell
                 pid = Environment.ProcessId,
                 pipe = _pipeName,
                 cwd = Environment.CurrentDirectory,
+                executable = Environment.ProcessPath,
+                shellIsWizardPwsh = IsWizardPowerShellExecutable(Environment.ProcessPath),
                 startedAt = _startedAt,
                 lastRequestAt = _lastRequestAt,
                 promptActive = snapshot.PromptActive,
@@ -332,6 +369,9 @@ namespace Microsoft.PowerShell
                 pid = Environment.ProcessId,
                 pipe = _pipeName,
                 cwd = Environment.CurrentDirectory,
+                executable = Environment.ProcessPath,
+                shellIsWizardPwsh = IsWizardPowerShellExecutable(Environment.ProcessPath),
+                analysisCachePath = Environment.GetEnvironmentVariable("PSModuleAnalysisCachePath"),
                 startedAt = _startedAt,
                 lastRequestAt = _lastRequestAt,
                 promptActive = snapshot.PromptActive,
@@ -566,6 +606,25 @@ namespace Microsoft.PowerShell
             }
         }
 
+        private static object SendKeys(string keys)
+        {
+            DateTimeOffset writeAt = DateTimeOffset.UtcNow;
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return new { status = "error", method = "native_console", writeAt, error = "unsupported_platform" };
+            }
+
+            try
+            {
+                int written = WindowsConsole.WriteKeys(keys);
+                return new { status = "ok", method = "native_console", writeAt, written };
+            }
+            catch (Exception exception)
+            {
+                return new { status = "error", method = "native_console", writeAt, error = exception.GetType().Name, message = exception.Message };
+            }
+        }
+
         private void WriteSessionRecord()
         {
             try
@@ -578,6 +637,7 @@ namespace Microsoft.PowerShell
                     protocol = ProtocolVersion,
                     cwd = Environment.CurrentDirectory,
                     executable = Environment.ProcessPath,
+                    shellIsWizardPwsh = IsWizardPowerShellExecutable(Environment.ProcessPath),
                     startedAt = _startedAt,
                     updatedAt = DateTimeOffset.UtcNow
                 };
@@ -653,6 +713,23 @@ namespace Microsoft.PowerShell
                 return (int)written;
             }
 
+            internal static int WriteKeys(string keys)
+            {
+                INPUT_RECORD[] records = BuildKeyRecords(keys);
+                if (records.Length == 0)
+                {
+                    return 0;
+                }
+
+                IntPtr handle = GetStdHandle(STD_INPUT_HANDLE);
+                if (!WriteConsoleInput(handle, records, (uint)records.Length, out uint written))
+                {
+                    throw new IOException("WriteConsoleInput failed: " + Marshal.GetLastWin32Error().ToString(CultureInfo.InvariantCulture));
+                }
+
+                return (int)written;
+            }
+
             internal static ConsoleReadResult Read(int maxLines)
             {
                 IntPtr handle = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -701,12 +778,39 @@ namespace Microsoft.PowerShell
                 for (int index = 0; index < text.Length; index++)
                 {
                     char value = text[index];
-                    short virtualKey = value == '\r' ? (short)0x0D : (short)0;
-                    records[index * 2] = INPUT_RECORD.Key(value, virtualKey, keyDown: true);
-                    records[index * 2 + 1] = INPUT_RECORD.Key(value, virtualKey, keyDown: false);
+                    KeySpec key = KeySpec.FromChar(value);
+                    records[index * 2] = INPUT_RECORD.Key(key, keyDown: true);
+                    records[index * 2 + 1] = INPUT_RECORD.Key(key, keyDown: false);
                 }
 
                 return records;
+            }
+
+            private static INPUT_RECORD[] BuildKeyRecords(string keys)
+            {
+                string normalized = (keys ?? string.Empty).Trim().ToLowerInvariant();
+                KeySpec key = normalized switch
+                {
+                    "{enter}" or "enter" => KeySpec.FromVirtualKey('\r', 0x0D, 0x1C),
+                    "{backspace}" or "backspace" or "bs" => KeySpec.FromVirtualKey('\b', 0x08, 0x0E),
+                    "{delete}" or "delete" or "del" => KeySpec.FromVirtualKey('\0', 0x2E, 0x53),
+                    "{escape}" or "{esc}" or "escape" or "esc" => KeySpec.FromVirtualKey('\x1B', 0x1B, 0x01),
+                    "{down}" or "down" => KeySpec.FromVirtualKey('\0', 0x28, 0x50),
+                    "{up}" or "up" => KeySpec.FromVirtualKey('\0', 0x26, 0x48),
+                    "{left}" or "left" => KeySpec.FromVirtualKey('\0', 0x25, 0x4B),
+                    "{right}" or "right" => KeySpec.FromVirtualKey('\0', 0x27, 0x4D),
+                    "{tab}" or "tab" => KeySpec.FromVirtualKey('\t', 0x09, 0x0F),
+                    "shift+{tab}" or "shift+tab" or "+{tab}" => KeySpec.FromVirtualKey('\t', 0x09, 0x0F, KeySpec.ShiftPressed),
+                    "ctrl+u" or "^u" or "{ctrl+u}" => KeySpec.FromVirtualKey('\0', 0x55, 0x16, KeySpec.LeftCtrlPressed),
+                    "ctrl+c" or "^c" or "{ctrl+c}" => KeySpec.FromVirtualKey('\0', 0x43, 0x2E, KeySpec.LeftCtrlPressed),
+                    _ => default
+                };
+                if (!key.IsValid)
+                {
+                    return System.Array.Empty<INPUT_RECORD>();
+                }
+
+                return new[] { INPUT_RECORD.Key(key, keyDown: true), INPUT_RECORD.Key(key, keyDown: false) };
             }
 
             [DllImport("kernel32.dll", SetLastError = true)]
@@ -759,6 +863,49 @@ namespace Microsoft.PowerShell
                 internal uint dwControlKeyState;
             }
 
+            private readonly struct KeySpec
+            {
+                internal const uint ShiftPressed = 0x0010;
+                internal const uint LeftCtrlPressed = 0x0008;
+
+                internal KeySpec(char value, ushort virtualKey, ushort scanCode, uint controlKeyState = 0)
+                {
+                    Value = value;
+                    VirtualKey = virtualKey;
+                    ScanCode = scanCode;
+                    ControlKeyState = controlKeyState;
+                    IsValid = true;
+                }
+
+                internal char Value { get; }
+
+                internal ushort VirtualKey { get; }
+
+                internal ushort ScanCode { get; }
+
+                internal uint ControlKeyState { get; }
+
+                internal bool IsValid { get; }
+
+                internal static KeySpec FromVirtualKey(char value, ushort virtualKey, ushort scanCode, uint controlKeyState = 0)
+                {
+                    return new KeySpec(value, virtualKey, scanCode, controlKeyState);
+                }
+
+                internal static KeySpec FromChar(char value)
+                {
+                    return value switch
+                    {
+                        '\r' => new KeySpec('\r', 0x0D, 0x1C),
+                        '\n' => new KeySpec('\r', 0x0D, 0x1C),
+                        '\x1B' => new KeySpec('\x1B', 0x1B, 0x01),
+                        '\x03' => new KeySpec('\x03', 0x43, 0x2E, LeftCtrlPressed),
+                        '\x15' => new KeySpec('\x15', 0x55, 0x16, LeftCtrlPressed),
+                        _ => new KeySpec(value, 0, 0)
+                    };
+                }
+            }
+
             [StructLayout(LayoutKind.Explicit)]
             private struct INPUT_RECORD
             {
@@ -768,7 +915,7 @@ namespace Microsoft.PowerShell
                 [FieldOffset(4)]
                 internal KEY_EVENT_RECORD KeyEvent;
 
-                internal static INPUT_RECORD Key(char value, short virtualKey, bool keyDown)
+                internal static INPUT_RECORD Key(KeySpec key, bool keyDown)
                 {
                     return new INPUT_RECORD
                     {
@@ -777,8 +924,10 @@ namespace Microsoft.PowerShell
                         {
                             bKeyDown = keyDown,
                             wRepeatCount = 1,
-                            wVirtualKeyCode = virtualKey,
-                            UnicodeChar = value
+                            wVirtualKeyCode = (short)key.VirtualKey,
+                            wVirtualScanCode = (short)key.ScanCode,
+                            UnicodeChar = key.Value,
+                            dwControlKeyState = key.ControlKeyState
                         }
                     };
                 }
