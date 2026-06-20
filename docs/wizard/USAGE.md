@@ -123,7 +123,7 @@ Useful when a hook or skill needs to call Claude programmatically — e.g. to su
 | `Get-AIContext -File <path> -StartLine <N> [-Radius 40]` | Streamed line-numbered slice for big files. |
 | `Get-RepoProfile [-Path <dir>]` | Detect HasSolution / HasBuildPsm1 / HasPyProject / HasCMakeLists / HasPesterTests / HasDotNetTests / HasPyTests + PrimaryHints (csharp/python/typescript/cpp/…). |
 | `Invoke-RepoBuild [-Path <dir>] [-TimeoutSec 600]` | Auto-route by profile (build.psm1 / dotnet / cmake / npm). Output bounded by `Invoke-Bounded`. |
-| `Invoke-RepoTest [-Path <dir>] [-TestPath <narrow>] [-Kind Auto\|Pester\|XUnit\|DotNet\|Python\|Node]` | Same shape, for tests. |
+| `Invoke-RepoTest [-Path <dir>] [-TestPath <narrow>] [-Filter <expr>] [-Kind Auto\|Pester\|XUnit\|DotNet\|Python\|Node\|CTest\|LiveLoop]` | Same shape, for tests. `-Filter` maps to pytest `-k`, CTest `-R`, and `dotnet test --filter`. |
 | `Update-RepoDigest [-Path <dir>]` | Write `.ai/repo-map.md` from `git ls-files`. |
 | `Measure-RepoSearch -Pattern <regex> [-Path <dir>] [-MaxCount 100]` | Benchmark `rg` vs PowerShell's recursive `Select-String`. |
 
@@ -212,6 +212,17 @@ The WizardErasmus side shells out to this cmdlet by default (env var
 `WIZARD_USE_MANAGED_TERMINAL_CMDLET`, default on). Set
 `WIZARD_USE_MANAGED_TERMINAL_CMDLET=0` as a kill-switch to use the
 legacy in-process spawn path.
+
+Windows Terminal tabs launched through `Start-WizardManagedTerminal`
+receive a stable per-session tab color automatically. The cmdlet also
+isolates the spawned shell's `PSModuleAnalysisCachePath` unless the
+caller already supplied one.
+Terminal host resolution prefers explicit `WIZARD_WT_EXE`, then a built custom
+terminal checkout from `WIZARD_TERMINAL_REPO` or
+`%USERPROFILE%\Documents\GitHub\terminal`, then normal `wt.exe` discovery.
+Utility tabs can pass `-Provider teamapp -CommandScript <script>` to reuse the
+same managed terminal host and metadata path without pretending to launch an
+agent CLI.
 
 ```powershell
 # Wake the loop driving managed terminal session claude-24624-…

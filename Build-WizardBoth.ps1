@@ -1,60 +1,17 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Build the wizard PowerShell fork in BOTH Debug and Release configurations, in
-    the right order, without self-lock surprises.
+    Build the wizard PowerShell fork in Debug and Release.
 
 .DESCRIPTION
-    Per the project's standing rule (`memory/wizard_release_build.md`): the deployed
-    `wizard-pwsh.cmd` shim points at the **Release** publish dir. Any improvement that
-    should reach live agent sessions therefore needs a Release build. Debug stays
-    useful for fast iteration of `.ps1` cmdlets via the publish/Modules copy trick.
+    Compatibility wrapper for the split build entrypoints:
 
-    This script ships both builds in one invocation:
+      1. Build-WizardDebug.ps1
+      2. Build-WizardRelease.ps1
 
-      1. Build Debug (Start-PSBuild -Configuration Debug). Fast — Debug pwsh is the
-         tool we use to run the Release build without locking ourselves.
-      2. Detect any Release pwsh.exe processes that hold publish DLLs open. If found,
-         either prompt to kill them (default) or kill silently with -Force. Headless
-         pwsh (no MainWindowTitle) is the typical lock-holder and is safe to kill —
-         these are stale loop continuations.
-      3. Build Release using the freshly-built Debug pwsh as the host, so the build
-         host's process never appears in the lock-holder list.
-
-    Either configuration alone is one switch away (-DebugOnly / -ReleaseOnly).
-
-.PARAMETER DebugOnly
-    Skip the Release build.
-
-.PARAMETER ReleaseOnly
-    Skip the Debug build (won't auto-handle the self-lock; pass -Force if you trust
-    that no Release pwsh sessions are alive).
-
-.PARAMETER Force
-    Kill lock-holding Release pwsh processes without prompting. Use when running
-    unattended (e.g., from a CI tick or a /loop body).
-
-.PARAMETER LogRoot
-    Override where build logs are written. Default: %LOCALAPPDATA%\WizardPowerShell\build-logs.
-
-.EXAMPLE
-    pwsh -File Build-WizardBoth.ps1
-
-    Build Debug, prompt to kill any Release lockers, build Release.
-
-.EXAMPLE
-    pwsh -File Build-WizardBoth.ps1 -Force
-
-    Same as above but kills lockers without prompting.
-
-.EXAMPLE
-    pwsh -File Build-WizardBoth.ps1 -DebugOnly
-
-    Iterate fast — build Debug only, skip the Release ceremony.
-
-.NOTES
-    Lives at repo root for discoverability. Don't move without updating the
-    wizard_release_build.md memory entry.
+    The deployed wizard-pwsh.cmd shim points at the Release publish directory, so
+    the default path still builds both configurations in order. DebugOnly and
+    ReleaseOnly are retained for existing callers.
 #>
 [CmdletBinding()]
 param(
@@ -67,174 +24,30 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = $PSScriptRoot
-if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'build.psm1'))) {
-    throw "Build-WizardBoth: build.psm1 not found at $repoRoot — run from the PowerShell repo root."
-}
+$debugScript = Join-Path $repoRoot 'Build-WizardDebug.ps1'
+$releaseScript = Join-Path $repoRoot 'Build-WizardRelease.ps1'
 
-if (-not $LogRoot) {
-    $LogRoot = Join-Path -Path ([Environment]::GetFolderPath('LocalApplicationData')) -ChildPath 'WizardPowerShell\build-logs'
-}
-if (-not (Test-Path -LiteralPath $LogRoot)) {
-    New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
-}
-
-function Get-PublishExe {
-    param([string] $Configuration)
-    return Join-Path $repoRoot ("src\powershell-win-core\bin\{0}\net11.0\win7-x64\publish\pwsh.exe" -f $Configuration)
-}
-
-function Invoke-WizardBuild {
-    param(
-        [string] $Configuration,
-        [string] $UsingPwshExe
-    )
-    $stamp = (Get-Date -Format 'yyyyMMddTHHmmss')
-    $log = Join-Path $LogRoot ("$Configuration-$stamp.log")
-    Write-Host "==> Building $Configuration  (log: $log)" -ForegroundColor Cyan
-
-    $script = @"
-`$env:Path = 'C:\\Users\\Oleh\\AppData\\Local\\Microsoft\\dotnet;' + `$env:Path
-Set-Location '$repoRoot'
-Import-Module ./build.psm1 -Force
-Start-PSBuild -Configuration $Configuration
-"@
-
-    if ($UsingPwshExe -and (Test-Path -LiteralPath $UsingPwshExe)) {
-        & $UsingPwshExe -NoProfile -NoLogo -Command $script 2>&1 | Tee-Object -FilePath $log | Out-Null
-    } else {
-        # Fall back to the host pwsh if the spawn target isn't there yet (first-ever run).
-        Invoke-Expression $script *>&1 | Tee-Object -FilePath $log | Out-Null
+foreach ($script in @($debugScript, $releaseScript)) {
+    if (-not (Test-Path -LiteralPath $script)) {
+        throw "Build-WizardBoth: required script not found: $script"
     }
-
-    if (-not (Select-String -LiteralPath $log -Pattern 'END: Generate PowerShell Configuration' -Quiet)) {
-        Write-Host "==> $Configuration build did not reach 'END: Generate PowerShell Configuration' — check $log" -ForegroundColor Yellow
-        if (Select-String -LiteralPath $log -Pattern '(error MSB|error CS|Build FAILED|Execution of \{ dotnet)' -Quiet) {
-            throw "Build-WizardBoth: $Configuration build FAILED — see $log"
-        }
-        throw "Build-WizardBoth: $Configuration build incomplete — see $log"
-    }
-    Write-Host "==> $Configuration build OK" -ForegroundColor Green
 }
 
-function Find-ReleaseLockers {
-    # Two ways a pwsh process can hold publish DLLs open:
-    #   1. Its executable IS the Release pwsh.exe (started from the build).
-    #   2. It was started from a different pwsh (e.g. installed PS 7) but
-    #      loaded one of our build's DLLs into its module list — common
-    #      when a wizard cmdlet imports our module by path.
-    # Both classes block MSB3027 publish copy. Find both.
-    $relPwsh = Get-PublishExe -Configuration 'Release'
-    if (-not (Test-Path -LiteralPath $relPwsh)) { return @() }
-    $publishDir = Split-Path -LiteralPath $relPwsh -Parent
-    $publishDirNorm = ($publishDir.TrimEnd('\') + '\').ToLowerInvariant()
-
-    $candidates = Get-Process pwsh -ErrorAction SilentlyContinue
-    $lockers = New-Object System.Collections.Generic.List[object]
-    foreach ($p in $candidates) {
-        $isMatch = $false
-        try {
-            if ($p.Path -ieq $relPwsh) { $isMatch = $true }
-        } catch { }
-        if (-not $isMatch) {
-            try {
-                foreach ($m in $p.Modules) {
-                    $mp = ($m.FileName ?? '').ToLowerInvariant()
-                    if ($mp.StartsWith($publishDirNorm)) {
-                        $isMatch = $true
-                        break
-                    }
-                }
-            } catch {
-                # Access denied on Modules is common for elevated processes;
-                # skip those — we can't see their modules so we can't safely
-                # claim they're locking us.
-            }
-        }
-        if ($isMatch) {
-            $null = $lockers.Add($p)
-        }
-    }
-    return @($lockers)
+if ($DebugOnly -and $ReleaseOnly) {
+    throw 'Build-WizardBoth: -DebugOnly and -ReleaseOnly cannot be used together.'
 }
-
-function Stop-ReleaseLockers {
-    param([switch] $NoPrompt)
-    $lockers = Find-ReleaseLockers
-    if ($lockers.Count -eq 0) {
-        Write-Host '==> No Release pwsh processes alive — Release build is unblocked.' -ForegroundColor Green
-        return
-    }
-    Write-Host "==> Found $($lockers.Count) Release pwsh process(es) that may lock the publish DLLs:" -ForegroundColor Yellow
-    $lockers | Select-Object Id, @{n='Started';e={$_.StartTime}}, @{n='RSS_MB';e={[Math]::Round($_.WorkingSet64/1MB,1)}}, MainWindowTitle | Format-Table -AutoSize | Out-Host
-
-    if (-not $NoPrompt) {
-        $resp = Read-Host 'Kill all of them? [y/N]'
-        if ($resp -notmatch '^[yY]') {
-            throw 'Build-WizardBoth: aborted by user — Release build would fail with locked DLLs.'
-        }
-    }
-    foreach ($p in $lockers) {
-        try {
-            $p.Kill()
-            Write-Host "    killed PID $($p.Id)" -ForegroundColor DarkGray
-        } catch {
-            Write-Host "    failed to kill PID $($p.Id): $_" -ForegroundColor Red
-        }
-    }
-    Start-Sleep -Seconds 2
-}
-
-# --- Phase 1: Debug ----------------------------------------------------------
 
 if (-not $ReleaseOnly) {
-    Invoke-WizardBuild -Configuration 'Debug'
+    $debugArgs = @{}
+    if ($LogRoot) { $debugArgs.LogRoot = $LogRoot }
+    & $debugScript @debugArgs
 }
-
-# --- Phase 2: Release (run from the just-built Debug pwsh to avoid self-lock) -
 
 if (-not $DebugOnly) {
-    Stop-ReleaseLockers -NoPrompt:$Force
-    $debugPwsh = Get-PublishExe -Configuration 'Debug'
-    try {
-        Invoke-WizardBuild -Configuration 'Release' -UsingPwshExe $debugPwsh
-    }
-    catch {
-        # Common race: a new pwsh session spawned (loop tab, agent, /loop body)
-        # AFTER the Stop-ReleaseLockers pre-pass but BEFORE the publish copy.
-        # Detect MSB3027 / "is being used by another process" in the most
-        # recent log; if found, sweep again and retry once.
-        $latestLog = Get-ChildItem -LiteralPath $LogRoot -Filter 'Release-*.log' -File |
-                     Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        $isLockRace = $false
-        if ($latestLog) {
-            $isLockRace = Select-String -LiteralPath $latestLog.FullName -Pattern 'MSB3027|is being used by another process' -Quiet
-        }
-        if (-not $isLockRace) { throw }
-        Write-Host '==> Release build hit a file-lock race; sweeping again and retrying once.' -ForegroundColor Yellow
-        Stop-ReleaseLockers -NoPrompt:$true
-        Start-Sleep -Seconds 3
-        Invoke-WizardBuild -Configuration 'Release' -UsingPwshExe $debugPwsh
-    }
-}
-
-# --- Verify rollout reached the deployed shim ---------------------------------
-
-$shim = Join-Path $env:USERPROFILE 'bin\wizard-pwsh.cmd'
-if (Test-Path -LiteralPath $shim) {
-    $shimTarget = (Get-Content -LiteralPath $shim -Raw) -split "`n" |
-        Where-Object { $_ -match 'pwsh\.exe' } |
-        Select-Object -First 1
-    Write-Host ''
-    Write-Host '==> Deployed shim points at:' -ForegroundColor Cyan
-    Write-Host "    $($shimTarget.Trim())"
-    if ($shimTarget -match 'Release') {
-        $relPwsh = Get-PublishExe -Configuration 'Release'
-        if (Test-Path -LiteralPath $relPwsh) {
-            $age = (Get-Date) - (Get-Item -LiteralPath $relPwsh).LastWriteTime
-            $ageStr = if ($age.TotalMinutes -lt 5) { 'just now' } else { '{0:N1} min ago' -f $age.TotalMinutes }
-            Write-Host "==> Release pwsh.exe last touched: $ageStr" -ForegroundColor Cyan
-        }
-    }
+    $releaseArgs = @{}
+    if ($Force) { $releaseArgs.Force = $true }
+    if ($LogRoot) { $releaseArgs.LogRoot = $LogRoot }
+    & $releaseScript @releaseArgs
 }
 
 Write-Host ''
