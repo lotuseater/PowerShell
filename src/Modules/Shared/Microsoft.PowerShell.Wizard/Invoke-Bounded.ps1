@@ -55,9 +55,29 @@ function Invoke-Bounded {
         $LogTo = Join-Path -Path $logDir -ChildPath ("$PID-$stamp.log")
     }
 
+    $resolvedFilePath = $FilePath
+    $resolvedArgumentList = @($ArgumentList)
+    if (-not [System.IO.Path]::IsPathRooted($FilePath) -and
+        -not ($FilePath -match '[\\/]')) {
+        $command = Get-Command -Name $FilePath -All -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandType -eq 'Application' } |
+            Select-Object -First 1
+        if ($command -and $command.Source) {
+            $resolvedFilePath = $command.Source
+        }
+    }
+
+    $resolvedExtension = [System.IO.Path]::GetExtension($resolvedFilePath)
+    if ($resolvedExtension -in @('.cmd', '.bat')) {
+        $cmdExe = $env:ComSpec
+        if (-not $cmdExe) { $cmdExe = 'cmd.exe' }
+        $resolvedArgumentList = @('/d', '/c', $resolvedFilePath) + $resolvedArgumentList
+        $resolvedFilePath = $cmdExe
+    }
+
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $FilePath
-    foreach ($a in $ArgumentList) {
+    $startInfo.FileName = $resolvedFilePath
+    foreach ($a in $resolvedArgumentList) {
         [void]$startInfo.ArgumentList.Add($a)
     }
     $startInfo.WorkingDirectory = $WorkingDirectory
@@ -71,6 +91,10 @@ function Invoke-Bounded {
     $process.StartInfo = $startInfo
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $startFailure = $null
+    $stdout = ''
+    $stderr = ''
+    $killed = $false
 
     if ($PassThru) {
         # β4: line-streamed mode. Use OutputDataReceived / ErrorDataReceived events so each
@@ -99,18 +123,24 @@ function Invoke-Bounded {
         $errSub = Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -Action $errHandler -MessageData $msgData
 
         try {
-            [void]$process.Start()
-            $process.BeginOutputReadLine()
-            $process.BeginErrorReadLine()
-
-            $killed = $false
-            if (-not $process.WaitForExit($TimeoutSec * 1000)) {
-                try { $process.Kill($true) } catch { }
-                $process.WaitForExit(5000) | Out-Null
-                $killed = $true
+            try {
+                [void]$process.Start()
+            } catch {
+                $startFailure = $_.Exception
             }
-            # Drain any outstanding events posted just before exit.
-            $process.WaitForExit()
+
+            if (-not $startFailure) {
+                $process.BeginOutputReadLine()
+                $process.BeginErrorReadLine()
+
+                if (-not $process.WaitForExit($TimeoutSec * 1000)) {
+                    try { $process.Kill($true) } catch { }
+                    $process.WaitForExit(5000) | Out-Null
+                    $killed = $true
+                }
+                # Drain any outstanding events posted just before exit.
+                $process.WaitForExit()
+            }
         } finally {
             Unregister-Event -SourceIdentifier $outSub.Name -ErrorAction SilentlyContinue
             Unregister-Event -SourceIdentifier $errSub.Name -ErrorAction SilentlyContinue
@@ -120,22 +150,36 @@ function Invoke-Bounded {
         $stdout = ($outQ.ToArray() -join "`n")
         $stderr = ($errQ.ToArray() -join "`n")
     } else {
-        [void]$process.Start()
+        try {
+            [void]$process.Start()
+        } catch {
+            $startFailure = $_.Exception
+        }
 
-        # Read both pipes asynchronously to prevent the child from blocking on a full buffer.
-        $outTask = $process.StandardOutput.ReadToEndAsync()
-        $errTask = $process.StandardError.ReadToEndAsync()
+        if (-not $startFailure) {
+            # Read both pipes asynchronously to prevent the child from blocking on a full buffer.
+            $outTask = $process.StandardOutput.ReadToEndAsync()
+            $errTask = $process.StandardError.ReadToEndAsync()
 
-        $killed = $false
-        if (-not $process.WaitForExit($TimeoutSec * 1000)) {
-            try { $process.Kill($true) } catch { }
-            $process.WaitForExit(5000) | Out-Null
-            $killed = $true
+            if (-not $process.WaitForExit($TimeoutSec * 1000)) {
+                try { $process.Kill($true) } catch { }
+                $process.WaitForExit(5000) | Out-Null
+                $killed = $true
+            }
+
+            $stdout = $outTask.GetAwaiter().GetResult()
+            $stderr = $errTask.GetAwaiter().GetResult()
         }
         $stopwatch.Stop()
+    }
 
-        $stdout = $outTask.GetAwaiter().GetResult()
-        $stderr = $errTask.GetAwaiter().GetResult()
+    if ($startFailure) {
+        $stopwatch.Stop()
+        $stderr = "Failed to start '$FilePath'"
+        if ($resolvedFilePath -ne $FilePath) {
+            $stderr += " resolved as '$resolvedFilePath'"
+        }
+        $stderr += ": $($startFailure.Message)"
     }
 
     $writer = [System.IO.StreamWriter]::new($LogTo, $false, [System.Text.UTF8Encoding]::new($false))
@@ -189,7 +233,7 @@ function Invoke-Bounded {
 
     $result = [pscustomobject]@{
         PSTypeName      = 'WizardBoundedResult'
-        ExitCode        = $process.ExitCode
+        ExitCode        = if ($startFailure) { -1 } else { $process.ExitCode }
         Head            = $headStr
         Tail            = $tailStr
         LogPath         = $LogTo

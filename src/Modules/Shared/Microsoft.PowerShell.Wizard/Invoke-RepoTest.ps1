@@ -11,6 +11,7 @@ function Invoke-RepoTest {
     param(
         [string] $Path = (Get-Location).ProviderPath,
         [string] $TestPath,
+        [string] $Filter,
         [ValidateSet('Auto', 'Pester', 'XUnit', 'DotNet', 'Python', 'Node', 'CTest', 'LiveLoop')]
         [string] $Kind = 'Auto',
         [int] $TimeoutSec = 600,
@@ -23,7 +24,7 @@ function Invoke-RepoTest {
         $resolvedKind = $Kind
         if ($Kind -eq 'Auto') {
             if ($repo.IsWizardErasmus -and $TestPath -and $TestPath -match 'real_visual_codex_loop|loop_no_focus_live') { $resolvedKind = 'LiveLoop' }
-            elseif ($repo.IsWizardErasmus -and $TestPath -and $TestPath -match '\.py$') { $resolvedKind = 'Python' }
+            elseif ($TestPath -and $TestPath -match '\.py(?:::|$)') { $resolvedKind = 'Python' }
             elseif ($repo.IsWizardErasmus) { $resolvedKind = 'CTest' }
             elseif ($repo.HasBuildPsm1 -and $repo.HasPesterTests) { $resolvedKind = 'Pester' }
             elseif ($repo.HasBuildPsm1 -and $repo.HasDotNetTests) { $resolvedKind = 'XUnit' }
@@ -44,23 +45,30 @@ function Invoke-RepoTest {
                 return Invoke-Bounded -FilePath $self -ArgumentList @('-NoProfile', '-Command', 'Import-Module ./build.psm1 -Force; Start-PSxUnit') -TimeoutSec $TimeoutSec -Quiet:$Quiet
             }
             'DotNet' {
-                return Invoke-Bounded -FilePath 'dotnet' -ArgumentList @('test', '--nologo', '--logger', 'console;verbosity=minimal') -TimeoutSec $TimeoutSec -Quiet:$Quiet
+                $args = @('test', '--nologo', '--logger', 'console;verbosity=minimal')
+                if ($Filter) { $args += @('--filter', $Filter) }
+                return Invoke-Bounded -FilePath 'dotnet' -ArgumentList $args -TimeoutSec $TimeoutSec -Quiet:$Quiet
             }
             'Python' {
                 $args = @('-q')
                 if ($TestPath) { $args += $TestPath }
+                if ($Filter) { $args += @('-k', $Filter) }
                 return Invoke-Bounded -FilePath 'python' -ArgumentList (@('-m', 'pytest') + $args) -TimeoutSec $TimeoutSec -Quiet:$Quiet
             }
             'CTest' {
                 $args = @('--test-dir', 'build', '--output-on-failure')
-                if ($TestPath) { $args += @('-R', $TestPath) }
+                if ($Filter) {
+                    $args += @('-R', $Filter)
+                }
+                elseif ($TestPath) { $args += @('-R', $TestPath) }
                 return Invoke-Bounded -FilePath 'ctest' -ArgumentList $args -TimeoutSec $TimeoutSec -Quiet:$Quiet
             }
             'LiveLoop' {
                 $old = $env:WIZARD_LOOP_LIVE
                 try {
                     $env:WIZARD_LOOP_LIVE = '1'
-                    return Invoke-Bounded -FilePath 'python' -ArgumentList @('-m', 'pytest', '-q', 'ai_wrappers/test_loop_no_focus_live.py', '-k', 'real_visual_codex_loop') -TimeoutSec $TimeoutSec -Quiet:$Quiet
+                    $liveFilter = if ($Filter) { $Filter } else { 'real_visual_codex_loop' }
+                    return Invoke-Bounded -FilePath 'python' -ArgumentList @('-m', 'pytest', '-q', 'ai_wrappers/test_loop_no_focus_live.py', '-k', $liveFilter) -TimeoutSec $TimeoutSec -Quiet:$Quiet
                 }
                 finally {
                     $env:WIZARD_LOOP_LIVE = $old

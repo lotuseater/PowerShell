@@ -3,6 +3,10 @@
 
 Describe "Invoke-Bounded + Get-WizardLog" -Tags "Feature" {
     BeforeAll {
+        Get-Module Microsoft.PowerShell.Wizard | Remove-Module -Force
+        $modulePath = Join-Path $PSScriptRoot '..' '..' '..' '..' 'src' 'Modules' 'Shared' 'Microsoft.PowerShell.Wizard' 'Microsoft.PowerShell.Wizard.psd1'
+        Import-Module $modulePath -Force
+
         # Use the host pwsh as our test child process — it's always available and we can ask
         # it to do exactly what we need (emit N lines, sleep, exit with a code).
         $childPwsh = Join-Path -Path $PSHOME -ChildPath "pwsh"
@@ -122,5 +126,38 @@ Describe "Invoke-Bounded + Get-WizardLog" -Tags "Feature" {
         # Log file written by -PassThru run must have all 200 rows.
         $logCount = (Get-Content -LiteralPath $logPath | Measure-Object).Count
         $logCount | Should -Be 200
+    }
+
+    It "returns one bounded failure result when the process cannot be started" {
+        $logPath = Join-Path -Path $tempLogDir -ChildPath "missing-command.log"
+        $missingName = "wizard-missing-$([Guid]::NewGuid().ToString('N'))"
+
+        $r = Invoke-Bounded -FilePath $missingName -LogTo $logPath -Quiet
+
+        $r.ExitCode | Should -Be -1
+        $r.KilledByTimeout | Should -BeFalse
+        $r.StdErrBytes | Should -BeGreaterThan 0
+        $r.LogPath | Should -BeExactly $logPath
+        (Get-Content -LiteralPath $logPath -Raw) | Should -Match "Failed to start '$missingName'"
+    }
+
+    It "resolves bare cmd shims through PATH" -Skip:($IsWindows -eq $false) {
+        $logPath = Join-Path -Path $tempLogDir -ChildPath "path-cmd-shim.log"
+        $shimName = "wizard-bounded-shim-$([Guid]::NewGuid().ToString('N')).cmd"
+        $shimPath = Join-Path -Path $tempLogDir -ChildPath $shimName
+        Set-Content -LiteralPath $shimPath -Encoding ascii -Value @(
+            '@echo off',
+            'echo shim:%1'
+        )
+        $oldPath = $env:PATH
+        try {
+            $env:PATH = "$tempLogDir;$oldPath"
+            $r = Invoke-Bounded -FilePath ([System.IO.Path]::GetFileNameWithoutExtension($shimName)) -ArgumentList @('ok') -MaxLines 10 -LogTo $logPath -Quiet
+        } finally {
+            $env:PATH = $oldPath
+        }
+
+        $r.ExitCode | Should -Be 0
+        $r.Head | Should -BeExactly 'shim:ok'
     }
 }
